@@ -1,8 +1,9 @@
 import sys
-import cv2
+import time
 import numpy as np
 from ids_peak import ids_peak as peak
 from ids_peak_ipl import ids_peak_ipl as peak_ipl
+import cv2
 
 class Camera:
     def __init__(self, index=0):
@@ -11,145 +12,82 @@ class Camera:
         self._remote = None
         self._datastream = None
         self._is_opened = False
+        self._continuous = False
+        self._delay_s = 0  # seconds between frames
 
-    # ------------------------
-    # Internal initialization
-    # ------------------------
+        self.width = 0
+        self.height = 0
+
     def _open(self):
         if self._is_opened:
             return
+        peak.Library.Initialize()
+        dev_mgr = peak.DeviceManager.Instance()
+        dev_mgr.Update()
+        if dev_mgr.Devices().empty():
+            print("No camera found")
+            sys.exit(-1)
+        self._m_device = dev_mgr.Devices()[self._index].OpenDevice(peak.DeviceAccessType_Control)
+        self._remote = self._m_device.RemoteDevice().NodeMaps()[self._index]
+        self.width = self._remote.FindNode("Width").Value()
+        self.height = self._remote.FindNode("Height").Value()
+        self._is_opened = True
 
-        try:
-            peak.Library.Initialize()
-            dev_mgr = peak.DeviceManager.Instance()
-            dev_mgr.Update()
+    def set_delay(self, delay_seconds):
+        self._delay_s = delay_seconds
+        print(f"Frame delay set to {self._delay_s} seconds")
 
-            if dev_mgr.Devices().empty():
-                print("No camera found.")
-                sys.exit(-1)
-
-            self._m_device = dev_mgr.Devices()[self._index].OpenDevice(
-                peak.DeviceAccessType_Control)
-            self._remote = self._m_device.RemoteDevice().NodeMaps()[self._index]
-            self._is_opened = True
-            print("Camera initialized.")
-        except Exception as e:
-            print("EXCEPTION during _open:", e)
-            sys.exit(-2)
-
-    # ------------------------
-    # Set attributes: exposure, gain, frame_rate
-    # ------------------------
     def set_attr(self, parameter, value):
-        self._open()
         node_map = {
             "exposure": "ExposureTime",
             "gain": "Gain",
             "frame_rate": "AcquisitionFrameRate"
         }
-
         if parameter not in node_map:
             print(f"Unknown parameter: {parameter}")
             return
-
+        self._open()
         try:
-            node_name = node_map[parameter]
-            node = self._remote.FindNode(node_name)
+            node = self._remote.FindNode(node_map[parameter])
             min_val, max_val = node.Minimum(), node.Maximum()
             if min_val <= value <= max_val:
                 node.SetValue(value)
-                print(f"{parameter} set to {value}")
             else:
-                raise ValueError(f"{parameter} out of bounds ({min_val}-{max_val})")
+                print(f"{parameter} out of bounds [{min_val}-{max_val}]")
         except Exception as e:
-            print("EXCEPTION in set_attr:", e)
+            print("EXCEPTION:", e)
 
-    # ------------------------
-    # Load/save camera settings
-    # ------------------------
-    def load_settings(self, filename):
-        self._open()
-        try:
-            self._remote.LoadFromFile(filename)
-            print(f"Settings loaded from {filename}")
-        except Exception as e:
-            print("EXCEPTION in load_settings:", e)
-
-    def save_settings(self, filename):
-        self._open()
-        try:
-            self._remote.StoreToFile(filename)
-            print(f"Settings saved to {filename}")
-        except Exception as e:
-            print("EXCEPTION in save_settings:", e)
-
-    # ------------------------
-    # ROI / Watch window
-    # ------------------------
     def set_watch_window(self, xoff, width, yoff, height):
         self._open()
         try:
-            ox = self._remote.FindNode("OffsetX")
-            oy = self._remote.FindNode("OffsetY")
-            w_node = self._remote.FindNode("Width")
-            h_node = self._remote.FindNode("Height")
-
-            # Increment validation
-            for val, inc, name in [(xoff, ox.Increment(), "OffsetX"),
-                                   (yoff, oy.Increment(), "OffsetY"),
-                                   (width, w_node.Increment(), "Width"),
-                                   (height, h_node.Increment(), "Height")]:
-                if val % inc != 0:
-                    raise ValueError(f"{name} value {val} not divisible by increment {inc}")
-
-            # Bounds validation
-            if not (w_node.Minimum() <= width <= w_node.Maximum()):
-                raise ValueError(f"Width {width} out of bounds ({w_node.Minimum()}-{w_node.Maximum()})")
-            if not (h_node.Minimum() <= height <= h_node.Maximum()):
-                raise ValueError(f"Height {height} out of bounds ({h_node.Minimum()}-{h_node.Maximum()})")
-
-            # Apply
-            ox.SetValue(xoff)
-            oy.SetValue(yoff)
-            w_node.SetValue(width)
-            h_node.SetValue(height)
-
+            xoff = max(0, min(xoff, self._remote.FindNode("Width").Maximum()-1))
+            yoff = max(0, min(yoff, self._remote.FindNode("Height").Maximum()-1))
+            width = min(width, self._remote.FindNode("Width").Maximum()-xoff)
+            height = min(height, self._remote.FindNode("Height").Maximum()-yoff)
+            self._remote.FindNode("OffsetX").SetValue(xoff)
+            self._remote.FindNode("OffsetY").SetValue(yoff)
+            self._remote.FindNode("Width").SetValue(width)
+            self._remote.FindNode("Height").SetValue(height)
+            self.width = width
+            self.height = height
             print(f"ROI set to {width}x{height} at ({xoff},{yoff})")
         except Exception as e:
-            print("EXCEPTION in set_watch_window:", e)
+            print("EXCEPTION:", e)
 
-    # ------------------------
-    # Acquisition helpers
-    # ------------------------
     def _prepare_datastream(self):
-        try:
-            streams = self._m_device.DataStreams()
-            if streams.empty():
-                raise RuntimeError("No datastreams available")
-
-            self._datastream = streams[self._index].OpenDataStream()
-            return True
-        except Exception as e:
-            print("EXCEPTION in _prepare_datastream:", e)
-            return False
+        self._datastream = self._m_device.DataStreams()[self._index].OpenDataStream()
+        return self._datastream is not None
 
     def _allocate_buffers(self):
         try:
-            ds = self._datastream
-            ds.Flush(peak.DataStreamFlushMode_DiscardAll)
-            for buf in ds.AnnouncedBuffers():
-                ds.RevokeBuffer(buf)
-
             payload = self._remote.FindNode("PayloadSize").Value()
-            num_buffers = ds.NumBuffersAnnouncedMinRequired()
-
+            num_buffers = self._datastream.NumBuffersAnnouncedMinRequired()
             for _ in range(num_buffers):
-                buf = ds.AllocAndAnnounceBuffer(payload)
-                ds.QueueBuffer(buf)
-
+                buf = self._datastream.AllocAndAnnounceBuffer(payload)
+                self._datastream.QueueBuffer(buf)
             return True
         except Exception as e:
-            print("EXCEPTION in _allocate_buffers:", e)
+            print("EXCEPTION in allocation:", e)
             return False
 
     def _start_acquisition(self):
@@ -158,57 +96,61 @@ class Camera:
                                               peak.DataStream.INFINITE_NUMBER)
             self._remote.FindNode("TLParamsLocked").SetValue(1)
             self._remote.FindNode("AcquisitionStart").Execute()
+            self._continuous = True
+            print("Continuous acquisition started.")
             return True
         except Exception as e:
-            print("EXCEPTION in _start_acquisition:", e)
+            print("EXCEPTION in start:", e)
             return False
 
-    # ------------------------
-    # Grab a single image as numpy array
-    # ------------------------
-    def grab_image(self, timeout_ms=5000):
+    def grab_next_frame(self, timeout_ms=5000, to_bgr=True):
         self._open()
-        if not self._prepare_datastream():
-            raise RuntimeError("Failed to prepare datastream")
-        if not self._allocate_buffers():
-            raise RuntimeError("Failed to allocate buffers")
-        if not self._start_acquisition():
-            raise RuntimeError("Failed to start acquisition")
+
+        if self._datastream is None:
+            if not self._prepare_datastream():
+                raise RuntimeError("Failed to prepare datastream")
+            if not self._allocate_buffers():
+                raise RuntimeError("Failed to allocate buffers")
+
+        if not self._continuous:
+            if not self._start_acquisition():
+                raise RuntimeError("Failed to start acquisition")
 
         try:
             buffer = self._datastream.WaitForFinishedBuffer(timeout_ms)
-
-            # Create IDS IPL image
-            ipl_image = peak_ipl.Image.CreateFromSizeAndBuffer(
+            img = peak_ipl.Image.CreateFromSizeAndBuffer(
                 buffer.PixelFormat(),
                 buffer.BasePtr(),
                 buffer.Size(),
                 buffer.Width(),
                 buffer.Height()
-            ).ConvertTo(peak_ipl.PixelFormatName_Mono8,
-                        peak_ipl.ConversionMode_Fast).get_numpy_2D()
-
-            # Release buffer back to queue
+            ).get_numpy_2D()
+            img = np.ascontiguousarray(img.copy(), dtype=np.uint8)
             self._datastream.QueueBuffer(buffer)
 
-            # Stop acquisition
-            self._remote.FindNode("AcquisitionStop").Execute()
-            self._remote.FindNode("TLParamsLocked").SetValue(0)
-            self._datastream.StopAcquisition(peak.AcquisitionStopMode_Default)
+            if self._delay_s >= 0.1:
+                self._remote.FindNode("AcquisitionStop").Execute()
+                self._remote.FindNode("TLParamsLocked").SetValue(0)
+                self._datastream.StopAcquisition(peak.AcquisitionStopMode_Default)
 
+            if to_bgr:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
+            if self._delay_s >= 0.1:
+                time.sleep(self._delay_s)
 
-            return ipl_image, True
+            return img, True
 
         except Exception as e:
             print("EXCEPTION grabbing image:", e)
             return None, False
 
-    # ------------------------
-    # Close camera
-    # ------------------------
+
     def close(self):
-        if self._is_opened:
+        try:
+            if self._continuous:
+                self._datastream.StopAcquisition(peak.AcquisitionStopMode_Default)
             peak.Library.Close()
-            self._is_opened = False
             print("Camera closed.")
+        except Exception as e:
+            print("EXCEPTION closing camera:", e)
