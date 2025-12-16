@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta
 import cv2
 import numpy as np
-from Camera.Camera import Camera
+from Module.Camera import Camera
 
 SAVE_DIR = "timelapse_images" 
 os.makedirs(SAVE_DIR, exist_ok=True) 

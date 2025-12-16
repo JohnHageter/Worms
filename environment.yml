@@ -1,0 +1,18 @@
+name: planaria-tracker
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - scikit-image
+  - opencv
+  - numba
+  - matplotlib
+  - tqdm
+  - pyyaml
+  - pip
+  - pip:
+      - tifffile

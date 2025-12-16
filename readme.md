@@ -27,4 +27,3 @@ Download vscode:
 - After you activate the envrionment your terminal line should have a `(venv)` next to it.  i.e. `(venv) PS D:\Repositories\Worms>`
 
 Click the play button in the top left and the `Worms.py` script will run.
-test
