@@ -5,3 +5,5 @@
 *.avi
 *.png
 
+Module/__pycache__/
+*.pyc
