@@ -1,254 +1,228 @@
-import cv2
 import numpy as np
-import matplotlib.pyplot as plt
+from Module.Dataset import load_frame
+import cv2
+from skimage.morphology import skeletonize
+from collections import defaultdict, deque
 
-def detect_wells(frame, debug=False,
-                 hough_dp=1.2, hough_minDist=200,
-                 hough_param1=100, hough_param2=30,
-                 minRadius=180, maxRadius=320,
-                 fallback_min_area_ratio=0.001, fallback_max_area_ratio=0.6):
+def snap_background(image, window=11, smooth_iters=3):
+    bg = cv2.medianBlur(image, window)
+
+    for _ in range(smooth_iters):
+        bg = cv2.GaussianBlur(bg, (201, 201), sigmaX=3)
+
+    return bg
+
+def blob_metrics(binary):
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+
+    metrics = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 10:
+            continue
+
+        length = None
+        thickness = None
+
+        if len(cnt) >= 5:
+            (_, _), (MA, ma), _ = cv2.fitEllipse(cnt)
+            length = max(MA, ma)
+            thickness = min(MA, ma)
+
+        metrics.append({
+            "contour": cnt,
+            "area": area,
+            "length": length,
+            "thickness": thickness
+        })
+
+    return metrics
+
+def filter_homomorphic(image, cutoff=30, gamma_h=2.0, gamma_l=0.5):
+    img_log = np.log1p(image)
+
+    dft = np.fft.fft2(img_log)
+    dft_shift = np.fft.fftshift(dft)
+
+    rows, cols = image.shape
+    crow, ccol = rows // 2, cols // 2
+    u = np.arange(-crow, crow)
+    v = np.arange(-ccol, ccol)
+    U, V = np.meshgrid(u, v, indexing='ij')
+    D = np.sqrt(U**2 + V**2)
+    H = (gamma_h - gamma_l)*(1 - np.exp(-(D**2)/(2*(cutoff**2)))) + gamma_l
+
+    dft_shift_filtered = dft_shift * H
+
+    dft_ifft = np.fft.ifftshift(dft_shift_filtered)
+    img_filtered = np.fft.ifft2(dft_ifft)
+    img_filtered = np.real(img_filtered)
+
+    img_out = np.expm1(img_filtered)
+
+    img_out = cv2.normalize(img_out, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    return img_out
+
+def sample_background(image_data, n_frames=300, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+
+    total_frames = len(image_data)
+    n_frames = min(n_frames, total_frames)
+    indicies = np.random.choice(total_frames, size = n_frames, replace = False)
+
+
+    frames = []
+    for idx in indicies:
+        frame = load_frame(image_data[idx]).astype(np.float32)
+        frame = (frame - frame.min()) / (frame.max() - frame.min() + 1e-12) 
+        frames.append(frame)
     
-    if frame is None:
-        return [], [], None if debug else ([], [])
+    stack = np.stack(frames, axis=0)
+    bg = np.median(stack, axis=0)
+    bg = (bg * 255).astype(np.uint8)
     
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame.copy()
-    gray_blur = cv2.medianBlur(gray, 7)
-    
-    wells = []
-    well_masks = []
-    debug_img = None
+    return bg
 
-    try:
-        circles = cv2.HoughCircles(
-            gray_blur,
-            cv2.HOUGH_GRADIENT,
-            dp=hough_dp,
-            minDist=hough_minDist,
-            param1=hough_param1,
-            param2=hough_param2,
-            minRadius=minRadius,
-            maxRadius=maxRadius
-        )
-    except Exception:
-        circles = None
+def extract_foreground(img, background, thresh_val=35):
+    fg = cv2.subtract(background, img)
+    _, binary = cv2.threshold(fg, thresh_val, 255, cv2.THRESH_BINARY)
+    # binary = cv2.adaptiveThreshold(fg, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    #                                    cv2.THRESH_BINARY, 15, -5)
+    return fg, binary
 
-    if circles is not None and len(circles) > 0:
-        circles = np.round(circles[0]).astype(int)
-        H, W = gray.shape
-        for (x, y, r) in circles:
-            if r <= 0 or x < 0 or y < 0 or x >= W or y >= H:
-                continue
-            wells.append((float(x), float(y), float(r)))
-            mask = np.zeros_like(gray, dtype=np.uint8)
-            # FULL radius now
-            cv2.circle(mask, (int(x), int(y)), int(r), 255, thickness=-1)
-            well_masks.append(mask.astype(bool))
-    else:
-        H, W = gray.shape
-        img_area = float(H * W)
-        found = False
+def find_components(binary):
+    return cv2.connectedComponentsWithStats(binary, connectivity=8)
 
-        for invert in (False, True):
-            th = cv2.adaptiveThreshold(
-                gray_blur, 255,
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY,
-                51, 7
-            )
+def centroid_in_any_well(cx, cy, wells):
+    for well in wells:
+        if centroid_within_well(cx, cy, well):
+            return True
+    return False
 
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-            th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=2)
+def centroid_within_well(x,y, well):
+    wx, wy, r = well
+    return (x - wx)**2 + (y - wy)**2 <= r**2
 
-            cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in cnts:
-                area = cv2.contourArea(c)
-                if area < img_area * fallback_min_area_ratio or area > img_area * fallback_max_area_ratio:
-                    continue
-                (cx, cy), radius = cv2.minEnclosingCircle(c)
-                circle_area = np.pi * (radius**2 + 1e-9)
-                circularity = area / circle_area
-                if 0.4 < circularity <= 1.6 and radius > minRadius * 0.5:
-                    wells.append((float(cx), float(cy), float(radius)))
-                    mask = np.zeros_like(gray, dtype=np.uint8)
-                    cv2.circle(mask, (int(round(cx)), int(round(cy))), int(round(radius)), 255, thickness=-1)
-                    well_masks.append(mask.astype(bool))
-                    found = True
-            if found:
+def extract_curve(mask, bbox, area, min_area=50):
+    if area <= min_area:
+        return None, None, None, 0
+
+    skel = skeletonize(mask.astype(bool)).astype(np.uint8)
+    path = longest_skeleton_path(skel)
+
+    if len(path) < 2:
+        return None, None, None, 0
+
+    path = np.array(path)
+    x, y, _, _ = bbox
+
+    curve_centroid = path.mean(axis=0)
+    end1 = path[0]
+    end2 = path[-1]
+
+    curve_centroid = (curve_centroid[0] + x, curve_centroid[1] + y)
+    end1 = (end1[0] + x, end1[1] + y)
+    end2 = (end2[0] + x, end2[1] + y)
+
+    return curve_centroid, end1, end2, len(path)
+
+def longest_skeleton_path(skel):
+    ys, xs = np.where(skel > 0)
+    if len(xs) < 2:
+        return []
+
+    points = list(zip(xs, ys))
+    graph = defaultdict(list)
+
+    neighbors = [(-1,-1), (-1,0), (-1,1),
+                 ( 0,-1),         ( 0,1),
+                 ( 1,-1), ( 1,0), ( 1,1)]
+
+    for x, y in points:
+        for dx, dy in neighbors:
+            nx, ny = x + dx, y + dy
+            if (nx, ny) in set(points):
+                graph[(x,y)].append((nx,ny))
+
+    endpoints = [p for p in graph if len(graph[p]) == 1]
+    if not endpoints:
+        return []
+
+    def bfs(start):
+        prev = {start: None}
+        q = deque([start])
+        while q:
+            u = q.popleft()
+            for v in graph[u]:
+                if v not in prev:
+                    prev[v] = u
+                    q.append(v)
+        end = max(prev, key=lambda p: (p[0]-start[0])**2 + (p[1]-start[1])**2)
+        path = []
+        cur = end
+        while cur is not None:
+            path.append(cur)
+            cur = prev[cur]
+        return path[::-1]
+
+    longest = []
+    for ep in endpoints:
+        p = bfs(ep)
+        if len(p) > len(longest):
+            longest = p
+
+    return longest
+
+def build_worms(labels, stats, centroids, wells, minimum_skeleton_area=10):
+    worms = []
+
+    for label in range(1, stats.shape[0]):
+        x, y, w, h, area = stats[label]
+        cx, cy = centroids[label]
+
+        well_id = None
+        for i, well in enumerate(wells):
+            if centroid_within_well(cx, cy, well):
+                well_id = i
                 break
 
-    # Merge overlapping wells
-    merged = []
-    merged_masks = []
-    used = [False] * len(wells)
-    for i, (x, y, r) in enumerate(wells):
-        if used[i]:
+        if well_id is None:
             continue
-        group = [(x, y, r)]
-        used[i] = True
-        for j in range(i + 1, len(wells)):
-            if used[j]:
-                continue
-            x2, y2, r2 = wells[j]
-            if np.hypot(x - x2, y - y2) < max(10, 0.25 * ((r + r2) / 2.0)):
-                group.append((x2, y2, r2))
-                used[j] = True
 
-        xs, ys, rs = [g[0] for g in group], [g[1] for g in group], [g[2] for g in group]
-        mx, my, mr = float(np.mean(xs)), float(np.mean(ys)), float(np.mean(rs))
-        merged.append((mx, my, mr))
+        mask = (labels[y:y+h, x:x+w] == label).astype(np.uint8) * 255
 
-        if len(group) == 1:
-            idx = wells.index(group[0])
-            merged_masks.append(well_masks[idx])
-        else:
-            mm = np.zeros_like(gray, dtype=bool)
-            for (gx, gy, gr) in group:
-                mask = np.zeros_like(gray, dtype=np.uint8)
-                cv2.circle(mask, (int(round(gx)), int(round(gy))), int(round(gr)), 255, thickness=-1)
-                mm = mm | mask.astype(bool)
-            merged_masks.append(mm)
+        curve_centroid, end1, end2, curve_length = extract_curve(
+            mask, (x, y, w, h), area, min_area=minimum_skeleton_area
+        )
 
-    wells = merged
-    well_masks = merged_masks
+        worms.append({
+            "well_id": well_id,
+            "mask": mask,
+            "bbox": (x, y, w, h),
+            "area": area,
+            "centroid": (cx, cy),
+            "curve_centroid": curve_centroid,
+            "end1": end1,
+            "end2": end2,
+            "curve_length": curve_length
+        })
 
-    if debug:
-        debug_img = frame.copy() if frame.ndim == 3 else cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        for idx, (x, y, r) in enumerate(wells):
-            cv2.circle(debug_img, (int(round(x)), int(round(y))), int(round(r)), (0, 255, 0), 2)
-            cv2.circle(debug_img, (int(round(x)), int(round(y))), max(2, int(round(r * 0.05))), (0, 0, 255), -1)
-            cv2.putText(debug_img, f"{idx}", (int(round(x)) + 6, int(round(y)) + 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+    return worms
 
-    return (wells, well_masks, debug_img) if debug else (wells, well_masks)
+def filter_worms(worms, min_area=10, max_area=500, min_thickness=1):
+    kept = []
 
-def mask_wells(gray, circles):
-    """
-    Input:
-        gray    - grayscale full frame
-        circles - list of wells: [(x, y, r), ...]
-    
-    Output:
-        List of boolean masks, one per well, fully filling the well interior.
-    """
-    well_masks = []
+    for worm in worms:
+        area = worm["area"]
+        if area < min_area or area > max_area:
+            continue
 
-    for (x, y, r) in circles:
-        mask = np.zeros_like(gray, dtype=np.uint8)
-        cv2.circle(mask, (int(round(x)), int(round(y))), int(round(r)), 255, thickness=-1)
-        well_masks.append(mask.astype(bool))
+        dist_map = cv2.distanceTransform(worm["mask"], cv2.DIST_L2, 5)
+        if dist_map.max() < min_thickness:
+            continue
 
-    return well_masks
+        kept.append(worm)
 
-def sort_wells(wells, well_masks, row_tol=50):
-    """
-    Sort wells top-left to bottom-right.
-
-    wells: list of (x, y, r)
-    well_masks: list of corresponding masks
-    row_tol: pixels to group wells in the same row
-    """
-
-    combined = list(zip(wells, well_masks))
-    combined = sorted(combined, key=lambda wm: wm[0][1])  # sort by y first
-
-    sorted_rows = []
-    current_row = []
-    current_y = None
-
-    for well, mask in combined:
-        y = well[1]
-        if current_y is None or abs(y - current_y) <= row_tol:
-            current_row.append((well, mask))
-            current_y = y if current_y is None else (current_y + y)/2
-        else:
-            # sort the current row by x (left to right)
-            current_row.sort(key=lambda wm: wm[0][0])
-            sorted_rows.extend(current_row)
-            current_row = [(well, mask)]
-            current_y = y
-    if current_row:
-        current_row.sort(key=lambda wm: wm[0][0])
-        sorted_rows.extend(current_row)
-
-    wells_sorted, masks_sorted = zip(*sorted_rows)
-    return list(wells_sorted), list(masks_sorted)
-
-def subtract_background(video, n_bg=5, alpha = 0.1, minimum=35, maximum=255, display=True):
-    """
-    Compute background with adaptation to global brightness changes and subtract it.
-
-    Args:
-        video_frames : list or array of frames (H x W x C or H x W)
-        n_bg         : number of initial frames to compute the initial background
-        threshold    : threshold for foreground mask
-        alpha        : running average update rate for adaptive background
-        display      : whether to display first frame, background, and mask
-
-    Returns:
-        background : final background image
-        fg_masks   : list of foreground masks for each frame
-    """
-
-    gray_stack = []
-    for frame in video[:n_bg]:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame.copy()
-        gray_stack.append(gray.astype(np.float32))
-    background = np.median(np.stack(gray_stack, axis=0), axis=0)
-
-    fg_masks = []
-
-    for i, frame in enumerate(video):
-        # Convert to grayscale
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame.copy()
-        gray = gray.astype(np.float32)
-
-        # Normalize frame to match background mean (handles brightness shifts)
-        bg_mean = np.mean(background)
-        frame_mean = np.mean(gray)
-        if frame_mean > 0:
-            gray_norm = gray * (bg_mean / frame_mean)
-        else:
-            gray_norm = gray
-
-        # Compute foreground mask
-        diff = np.abs(gray_norm - background)
-        _, fg_mask = cv2.threshold(diff.astype(np.uint8), minimum, maximum, cv2.THRESH_BINARY)
-        fg_masks.append(fg_mask)
-
-        # Update background adaptively
-        background = (1 - alpha) * background + alpha * gray_norm
-
-    if display:
-        plt.figure(figsize=(12,4))
-        plt.subplot(1,3,1)
-        plt.title("First frame")
-        plt.imshow(video[0], cmap='gray' if video[0].ndim==2 else None)
-        plt.axis('off')
-
-        plt.subplot(1,3,2)
-        plt.title("Final background")
-        plt.imshow(background.astype(np.uint8), cmap='gray')
-        plt.axis('off')
-
-        plt.subplot(1,3,3)
-        plt.title("Foreground mask (first frame)")
-        plt.imshow(fg_masks[0], cmap='gray')
-        plt.axis('off')
-
-        plt.tight_layout()
-        plt.show()
-
-    return background.astype(np.uint8), fg_masks
-
-def normalize_frame(frame, reference):
-    """
-    Normalize frame intensity to match the reference (background) mean.
-    """
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim==3 else frame.copy()
-    ref_mean = np.mean(reference)
-    frame_mean = np.mean(gray)
-    if frame_mean > 0:
-        gray_norm = (gray.astype(np.float32) * (ref_mean / frame_mean)).clip(0,255).astype(np.uint8)
-    else:
-        gray_norm = gray
-    return gray_norm
+    return kept

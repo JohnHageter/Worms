@@ -1,36 +1,105 @@
+import cv2
+import numpy as np
+import h5py
+from pathlib import Path
 from Module.utils import *
+from Module.Dataset import *
 from Module.ImageProcessor import *
 from Module.Tracker import *
-import matplotlib.pyplot as plt
-from pprint import pprint
 
-video_path = "./Data/Test_1.tif"
 
-video, _ = load_video(video_path)
-#play_video(video, framerate=30, num_frames=1000, shrink_factor=0.5)
+data_folder = Path("Data/timelapse_images_2")
+dataset_file = data_folder / "dataset.h5"
 
-wells,masks,test = detect_wells(video[0], debug=True)
+length_threshold = 300  
+min_area = 20
+max_area = 150
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+fps = 10    
 
-print("Detected wells:")
-print(wells)
-well_masks = mask_wells(video[0], wells)
 
-wells, well_masks_sorted = sort_wells(wells, well_masks)
-print("Sorted wells:")
-print(wells)
+if not dataset_file.exists():
+    print("Generating H5 dataset...")
+    generate_dataset(data_folder, output_file=dataset_file)
 
-#plot_well_masks(well_masks_sorted)
-background, fg_masks = subtract_background(video, n_bg=1, minimum=20, maximum=250, display=True)
-fg_array = np.stack(fg_masks, axis=0)
-print(fg_array.shape)
-#play_video(fg_array, framerate=30, num_frames=1000, shrink_factor=0.5)
+with h5py.File(dataset_file, 'r') as f:
+    image_data = f['images/data'][:]
+    timestamps = f['images/timestamps'][:]
 
-well_tracks, lineage = track_worms(video, well_masks_sorted, fg_array,
-                                  min_area_for_head_tail=1000,
-                                  max_tracking_dist=100,
-                                  max_still_frames=10)
+wells, masks, parameters = detect_wells(
+    image_data[137],
+    hough_param1=25,
+    hough_param2=24,
+    well_diameter_mm=35.0,
+    mm_per_pixel=0.187,
+    well_tolerance=0.15,
+    min_radius=96,
+    max_radius=129,
+    n_wells=24
+)
 
-print("Tracking results:")
-pprint(lineage)
 
-visualize_tracking(video, well_tracks, fps=10)
+out_path = data_folder / 'output'
+out_path.mkdir(exist_ok=True)
+clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(4,4))
+
+for id, well in enumerate(wells):
+
+    first_frame = crop_well(image_data[0], well)
+    h, w = first_frame.shape
+
+    writer = cv2.VideoWriter(
+        str(out_path / f'well_{id:02d}.mp4'),
+        fourcc,
+        fps,
+        (w, h),
+        isColor=True
+    )
+
+    bg_frame = clahe.apply(image_data[137])
+    well_bg = filter_homomorphic(snap_background(crop_well(bg_frame, well), 11, 7))
+    mask = crop_well(masks[id], well).astype(np.uint8) * 255
+
+    bg_thresh = None
+
+    for i in range(image_data.shape[0]):
+
+        well_frame = crop_well(image_data[i], well)
+        well_frame = filter_homomorphic(well_frame, gamma_h=1.2)
+
+        fg = cv2.subtract(well_bg, well_frame)
+        fg = cv2.bitwise_and(fg, fg, mask=mask)
+
+        _, thresh = cv2.threshold(fg, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        thresh = cv2.morphologyEx(
+            thresh,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+        )
+
+        kernel = np.ones((3,3), np.uint8)
+        thresh = cv2.erode(thresh,kernel, iterations=1)
+
+        if i == 136:
+            bg_thresh = thresh.copy()
+
+        if bg_thresh is not None:
+            thresh = cv2.subtract(thresh, bg_thresh)
+
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            thresh, connectivity=8
+        )
+
+        vis = cv2.cvtColor(well_frame, cv2.COLOR_GRAY2BGR)
+
+
+
+        cv2.imshow("Thesholding", thresh)
+        cv2.imshow("Write", vis)
+        if cv2.waitKey(10) & 0xFF == 27:
+            break
+
+    #writer.release()
+
+cv2.destroyAllWindows()
