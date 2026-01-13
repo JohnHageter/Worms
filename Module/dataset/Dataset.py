@@ -6,6 +6,19 @@ import h5py
 from datetime import datetime
 from Module.utils import read_timestamp
 
+'''
+Dataset should move to a compressed mp4 with h5 metadata
+'''
+def open_dataset(video_path):
+    if not Path(video_path).exists():
+        raise ValueError(f"Video file {video_path} does not exist.")
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video file {video_path}.")
+
+    return cap
+
 def crop_well(image, well):
     H, W = image.shape[:2]
     x,y,r = well
@@ -66,6 +79,7 @@ def _sort_wells(wells, well_masks, row_tol=50):
     wells_sorted, masks_sorted = zip(*sorted_rows)
     return list(wells_sorted), list(masks_sorted)
 
+@DeprecationWarning
 def get_image_paths(folder):
     type = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
 
@@ -79,6 +93,7 @@ def get_image_paths(folder):
 
 # Unsure of final frame rate. Barring num of frames can range from 5000 to 1000000 
 # only work with individual frames at a time instead of loading all frames at once.    
+@DeprecationWarning
 def load_frame(image_path, scale=1.0):
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -228,6 +243,7 @@ def expand_wells(wells, scale=1.2):
         expanded.append((x, y, r_new))
     return expanded
 
+@DeprecationWarning
 def generate_dataset(folder_path, output_file='dataset.h5', compression='gzip',compression_level=4):
     images = os.listdir(folder_path)
     images = [img for img in images if img.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]

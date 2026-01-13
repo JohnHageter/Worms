@@ -1,3 +1,13 @@
+import tkinter as tk
+from Module.ui.TimelapseUI import TimelapseApp
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TimelapseApp(root)
+    root.mainloop()
+
+
+'''
 import sys
 sys.path.insert(0, "dependencies")
 
@@ -6,7 +16,7 @@ import time
 from datetime import datetime, timedelta
 import cv2
 import numpy as np
-from Module.Camera import Camera
+from Module.io.Camera import Camera
 
 SAVE_DIR = "timelapse_images" 
 os.makedirs(SAVE_DIR, exist_ok=True) 
@@ -47,3 +57,4 @@ except KeyboardInterrupt:
 finally:
     cam.close() 
     print("Camera closed. Timelapse finished.")
+'''

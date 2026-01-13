@@ -2,10 +2,11 @@ import cv2
 import numpy as np
 from pathlib import Path
 from Module.Worms import WormTracker
+from Module.imageprocessing.background import sample_background
+from Module.imageprocessing.foreground import extract_foreground
 from Module.utils import *
-from Module.Dataset import *
-from Module.ImageProcessor import *
-from Module.Tracker import *
+from Module.dataset.Dataset import *
+from Module.imageprocessing.ImageProcessor import *
 import csv
 
 
@@ -50,8 +51,6 @@ for i, f in enumerate(image_data):
     worm_tracks = tracker.update(worms_to_keep, frame_idx=i)
     #cv2.imshow("Threshold", cv2.resize(thresh, (W//2, H//2), cv2.INTER_AREA))
 
-
-
     visual = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
     for worm in worms_to_keep:
@@ -67,7 +66,7 @@ for i, f in enumerate(image_data):
             cv2.circle(visual, (end2[0], end2[1]), 3, (0,0,255), -1)
 
     for well in wells:
-        x, y, r = map(int, well)
+        x, y, r = map(int, well) 
         cv2.circle(visual, (x,y), r, (255,0,0), 1)
 
     for t in worm_tracks:

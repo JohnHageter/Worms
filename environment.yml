@@ -7,12 +7,14 @@ dependencies:
   - python=3.10
   - numpy
   - scipy
-  - scikit-image
   - opencv
-  - numba
+  - scikit-image
   - matplotlib
   - tqdm
   - pyyaml
   - pip
   - pip:
-      - tifffile
+      - ids_peak
+      - ids_peak_ipl
+      - black
+      - mypy
