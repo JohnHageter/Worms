@@ -79,7 +79,6 @@ def _sort_wells(wells, well_masks, row_tol=50):
     wells_sorted, masks_sorted = zip(*sorted_rows)
     return list(wells_sorted), list(masks_sorted)
 
-@DeprecationWarning
 def get_image_paths(folder):
     type = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'}
 
@@ -93,7 +92,6 @@ def get_image_paths(folder):
 
 # Unsure of final frame rate. Barring num of frames can range from 5000 to 1000000 
 # only work with individual frames at a time instead of loading all frames at once.    
-@DeprecationWarning
 def load_frame(image_path, scale=1.0):
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -163,7 +161,7 @@ def detect_wells(
 
         if circles is None:
             print("No wells detected.")
-            return wells, masks
+            return wells, masks, parameters
 
         for x, y, r in np.round(circles[0]).astype(int):
             if r <= 0 or x < 0 or y < 0 or x >= W or y >= H:
