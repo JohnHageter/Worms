@@ -28,8 +28,7 @@ class OpenCVCamera(Camera):
         self._watch_window = None  # (x_start, y_start, width, height)
         self._parameters = {}  # user-defined camera params
 
-
-    def open(self) -> None:
+    def _do_open(self) -> None:
         self._require_state(CameraState.CLOSED)
 
         self.cap = cv2.VideoCapture(self.device_index)
@@ -38,7 +37,7 @@ class OpenCVCamera(Camera):
 
         self._state = CameraState.OPEN
 
-    def close(self) -> None:
+    def _do_close(self) -> None:
         if self._state == CameraState.STREAMING:
             self.stop_stream()
 
@@ -48,7 +47,7 @@ class OpenCVCamera(Camera):
 
         self._state = CameraState.CLOSED
 
-    def set_parameter(self, parameter="none", value=None) -> None:
+    def _do_set_parameter(self, parameter="none", value=None) -> None:
         """
         Set camera parameters
 
@@ -69,36 +68,37 @@ class OpenCVCamera(Camera):
             if parameter in prop_map and value is not None:
                 self.cap.set(prop_map[parameter], value)
 
-    def set_framerate(self, framerate: float) -> None:
+    def _do_set_framerate(self, fps: float) -> None:
         self._require_state(CameraState.OPEN)
+
         if self.cap is None:
-            raise RuntimeError("Camera not opened.")
+            raise RuntimeError("Camera not opened")
 
-        cam_framerate = self.cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            raise ValueError("Requested framerate must be > 0")
 
-        if framerate <= 0:
-            framerate = 1
+
+        self.cap.set(cv2.CAP_PROP_FPS, fps)
+        applied_fps = self.cap.get(cv2.CAP_PROP_FPS)
+
+        if applied_fps <= 0:
+            raise RuntimeError("Backend does not support FPS control")
+
+        if abs(applied_fps - fps) > 1e-3:
             print(
-                f"Warning: Requested framerate {framerate} is less than or equal to 0. "
-                f"Setting camera framerate to 1"
+                f"Warning: Requested {fps:.2f} FPS, "
+                f"camera applied {applied_fps:.2f} FPS"
             )
 
-        if cam_framerate > 0 and framerate > cam_framerate:
-            print(
-                f"Warning: Requested framerate {framerate} FPS exceeds "
-                f"camera capability ({cam_framerate:.1f} FPS). "
-                f"Clamping to {cam_framerate:.1f} FPS."
-            )
-            self.fps = cam_framerate
-        else:
-            self.fps = framerate
+        self.requested_fps = fps
+        self.applied_fps = applied_fps
 
-    def set_watch_window(self, x_start, width, y_start, height) -> None:
+    def _do_set_watch_window(self, x_start, width, y_start, height) -> None:
         """Restrict frames to a ROI (Region of Interest)"""
         self._require_state(CameraState.OPEN)
         self._watch_window = (x_start, y_start, width, height)
 
-    def grab_frame(self) -> np.ndarray:
+    def _do_grab_frame(self) -> np.ndarray:
         """Grab a single frame (blocking)"""
         self._require_state(CameraState.STREAMING)
 
@@ -118,7 +118,7 @@ class OpenCVCamera(Camera):
 
         return frame
 
-    def start_stream(self, fps: float = 30) -> None:
+    def _do_start_stream(self, fps: float = 30) -> None:
         """Start a background thread to capture frames at fixed FPS"""
         self._require_state(CameraState.OPEN)
         if self._running:
@@ -145,11 +145,10 @@ class OpenCVCamera(Camera):
             except Exception as e:
                 raise CaptureError("Stream interrupted.")
 
-
         self._thread = threading.Thread(target=_loop, daemon=True)
         self._thread.start()
 
-    def stop_stream(self) -> None:
+    def _do_stop_stream(self) -> None:
         """Stop streaming thread"""
         self._require_state(CameraState.STREAMING)
 
@@ -164,12 +163,10 @@ class OpenCVCamera(Camera):
         self._thread = None
         self._state = CameraState.OPEN
 
-    def grab_last_frame(self) -> Optional[np.ndarray]:
+    def _do_grab_last_frame(self) -> Optional[np.ndarray]:
         """Return the latest frame grabbed by the streaming thread"""
         self._require_state(CameraState.STREAMING)
         with self._lock:
             if self._latest_frame is None:
                 return None
             return self._latest_frame.copy()
-
-

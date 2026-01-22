@@ -4,6 +4,7 @@
 *.mp4
 *.avi
 *.png
+*.ini
 
 Module/__pycache__/
 outputs/

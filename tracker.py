@@ -16,17 +16,34 @@ video = open_dataset("Data/mp4_data/Trial1_2.mp4")
 # background = sample_background(video, n_frames=200)
 # background = background.astype(np.uint8)
 
-wells, masks, parameters = detect_wells(
-    video.get(0),
-    hough_param1=25,
-    hough_param2=24,
-    well_diameter_mm=35.0,
-    mm_per_pixel=0.187,
-    well_tolerance=0.15,
-    min_radius=96,
-    max_radius=129,
-    n_wells=24
-)
+# wells, masks, parameters = detect_wells(
+#     video.get(0),
+#     hough_param1=25,
+#     hough_param2=24,
+#     well_diameter_mm=35.0,
+#     mm_per_pixel=0.187,
+#     well_tolerance=0.15,
+#     min_radius=96,
+#     max_radius=129,
+#     n_wells=24
+# )
+
+try:
+    while True:
+        ret, frame = video.read()
+        if not ret:
+            break
+
+        cv2.imshow("Video", frame)
+
+        if cv2.waitKey(10) & 0xFF == ord("q"):
+            break
+except Exception as e:
+    print(str(e))
+
+
+video.release()
+cv2.destroyAllWindows()
 
 
 # tracker = WormTracker(max_dist=300, max_missed=100)
@@ -103,7 +120,6 @@ wells, masks, parameters = detect_wells(
 #         )
 
 #     cv2.waitKey(10)
-
 
 
 # cv2.destroyAllWindows()

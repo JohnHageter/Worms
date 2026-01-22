@@ -100,3 +100,16 @@ def trace_path(skel, start):
 
     return path
 
+def create_writer(
+    file: str, width: int, height: int, frame_rate: float = 10.0, is_color: bool = True
+) -> cv2.VideoWriter:
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    writer = cv2.VideoWriter(
+        file, fourcc, frame_rate, (width, height), isColor=is_color
+    )
+
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not open VideoWriter for {file}")
+
+    return writer
