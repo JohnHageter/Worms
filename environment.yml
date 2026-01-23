@@ -12,6 +12,7 @@ dependencies:
   - matplotlib
   - tqdm
   - pyyaml
+  - PySide6
   - pip
   - pip:
       - ids_peak
