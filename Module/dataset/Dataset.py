@@ -94,3 +94,26 @@ def expand_well_radius(wells, scale=1.2):
         r_new = r * scale
         expanded.append((x, y, r_new))
     return expanded
+
+
+def get_image_paths(folder):
+    type = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+
+    files = [
+        os.path.join(folder, f)
+        for f in os.listdir(folder)
+        if Path(f).suffix.lower() in type
+    ]
+
+    return sorted(files)
+
+
+# Unsure of final frame rate. Barring num of frames can range from 5000 to 1000000
+# only work with individual frames at a time instead of loading all frames at once.
+def load_frame(image_path, scale=1.0):
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"Could not load image from {image_path}")
+    if scale != 1.0:
+        img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    return img
