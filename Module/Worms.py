@@ -48,20 +48,15 @@ class WormTracker:
     def order_endpoints(self, end1, end2, prev_end1, prev_end2):
         if end1 is None or end2 is None:
             return end1, end2
-
         if prev_end1 is None or prev_end2 is None:
             return end1, end2
 
-        d11 = np.hypot(end1[0]-prev_end1[0], end1[1]-prev_end1[1])
-        d22 = np.hypot(end2[0]-prev_end2[0], end2[1]-prev_end2[1])
-
-        d12 = np.hypot(end1[0]-prev_end2[0], end1[1]-prev_end2[1])
-        d21 = np.hypot(end2[0]-prev_end1[0], end2[1]-prev_end1[1])
-
-        if d11 + d22 <= d12 + d21:
-            return end1, end2
-        else:
+        # Assign end1 to whichever is closer to previous end1
+        if np.hypot(end2[0]-prev_end1[0], end2[1]-prev_end1[1]) < \
+        np.hypot(end1[0]-prev_end1[0], end1[1]-prev_end1[1]):
+            # swap
             return end2, end1
+        return end1, end2
 
 
     def update(self, worms, frame_idx):

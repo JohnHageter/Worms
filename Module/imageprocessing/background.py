@@ -12,7 +12,7 @@ def snap_background(image, window=11, smooth_iters=3):
     return bg
 
 
-def sample_background(image_data, n_frames=300, seed=None):
+def sample_background_im(image_data, n_frames=300, seed=None):
     if seed is not None:
         np.random.seed(seed)
 
@@ -20,42 +20,55 @@ def sample_background(image_data, n_frames=300, seed=None):
     n_frames = min(n_frames, total_frames)
     indicies = np.random.choice(total_frames, size = n_frames, replace = False)
 
-
     frames = []
     for idx in indicies:
         frame = load_frame(image_data[idx]).astype(np.float32)
         frame = (frame - frame.min()) / (frame.max() - frame.min() + 1e-12) 
         frames.append(frame)
-    
+
     stack = np.stack(frames, axis=0)
     bg = np.median(stack, axis=0)
     bg = (bg * 255).astype(np.uint8)
-    
+
     return bg
 
 
-def filter_homomorphic(image, cutoff=30, gamma_h=2.0, gamma_l=0.5):
-    img_log = np.log1p(image)
+def sample_background(cap: cv2.VideoCapture, n_frames=300, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
 
-    dft = np.fft.fft2(img_log)
-    dft_shift = np.fft.fftshift(dft)
+    if not cap.isOpened():
+        raise ValueError("VideoCapture is not opened")
 
-    rows, cols = image.shape
-    crow, ccol = rows // 2, cols // 2
-    u = np.arange(-crow, crow)
-    v = np.arange(-ccol, ccol)
-    U, V = np.meshgrid(u, v, indexing='ij')
-    D = np.sqrt(U**2 + V**2)
-    H = (gamma_h - gamma_l)*(1 - np.exp(-(D**2)/(2*(cutoff**2)))) + gamma_l
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if total_frames <= 0:
+        raise ValueError("Could not determine total frame count")
 
-    dft_shift_filtered = dft_shift * H
+    n_frames = min(n_frames, total_frames)
+    indices = np.random.choice(total_frames, size=n_frames, replace=False)
+    original_pos = cap.get(cv2.CAP_PROP_POS_FRAMES)
 
-    dft_ifft = np.fft.ifftshift(dft_shift_filtered)
-    img_filtered = np.fft.ifft2(dft_ifft)
-    img_filtered = np.real(img_filtered)
+    frames = []
+    for idx in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+        if not ret:
+            continue
 
-    img_out = np.expm1(img_filtered)
+        if frame.ndim == 3:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    img_out = cv2.normalize(img_out, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        frame = frame.astype(np.float32)
+        frame = (frame - frame.min()) / (frame.max() - frame.min() + 1e-12)
+        frames.append(frame)
 
-    return img_out
+    cap.set(cv2.CAP_PROP_POS_FRAMES, original_pos)
+
+    if len(frames) == 0:
+        raise ValueError("No frames could be read from VideoCapture")
+
+    stack = np.stack(frames, axis=0)
+    bg = np.median(stack, axis=0)
+    bg = (bg * 255).astype(np.uint8)
+
+    return bg
