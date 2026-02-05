@@ -75,10 +75,10 @@ class Camera(ABC):
         if not self._is_open:
             raise InvalidStateError("Camera must be opened before reading.")
 
-        timestamp = time.perf_counter()
 
         try:
             success, frame = self._read_frame()
+            timestamp = time.perf_counter()
             return success, frame, timestamp
         except Exception as e:
             raise CaptureError("Failed to read frame.") from e

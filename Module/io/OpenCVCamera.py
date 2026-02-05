@@ -12,6 +12,7 @@ class OpenCVCamera(Camera):
 
     def _open(self):
         self.cap = cv2.VideoCapture(self.device_index)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     def _close(self):
         if self.cap:
@@ -38,11 +39,11 @@ class OpenCVCamera(Camera):
 
         except Exception:
             return False
-            
+
     def _watch(self, x_off, width, y_off, height) -> bool:
         self.watch_window = x_off, width, y_off, height
         return True
-            
+
     def _read_frame(self) -> tuple[bool, np.ndarray]:
         if not self.cap:
             raise CameraError("Cannot read frame while camera is closed.")
@@ -62,4 +63,3 @@ class OpenCVCamera(Camera):
                 frame = frame[y0:y1, x0:x1]
 
         return True, frame
-
