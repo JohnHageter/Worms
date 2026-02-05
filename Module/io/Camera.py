@@ -1,104 +1,134 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Any
+from typing import Optional, Any, Tuple
 import numpy as np
-
-from Module.io.CameraStates import CameraState
-from Module.io.Exceptions import CaptureError, InvalidStateError
+import time
 
 
 class Camera(ABC):
-    """Basic camera object"""
 
     def __init__(self):
-        self._state = CameraState.CLOSED
+        self.cam = None
+        self.watch_window = None #x_off, width, y_off, height
+        self._is_open: bool = False
 
-    @property
-    def state(self) -> CameraState:
-        return self._state
+    def open(self) -> bool:
+        """
+        Open the camera device.
+        """
+        if self._is_open:
+            return True
 
-    def _require_state(self, *allowed: CameraState) -> None:
-        if self._state not in allowed:
-            raise InvalidStateError(
-                f"Operation not allowed in state {self._state.name}"
-            )
-
-    def open(self) -> None:
-        self._require_state(CameraState.CLOSED)
-        self._do_open()
-        self._state = CameraState.OPEN
+        try:
+            self._open()
+            self._is_open = True
+            return True
+        except Exception as e:
+            self._is_open = False
+            raise CameraError("Failed to open camera.") from e
 
     def close(self) -> None:
-        self._require_state(CameraState.OPEN)
-        self._do_close()
-        self._state = CameraState.CLOSED
-        pass
+        """
+        Close and release the camera.
+        """
+        if not self._is_open:
+            return
 
-    def set_parameter(self, key, value) -> None:
-        self._require_state(CameraState.OPEN)
-        self._do_set_parameter(key, value)
-
-    def set_framerate(self, fps: float) -> None:
-        self._require_state(CameraState.OPEN)
-        self._do_set_framerate(fps)
-
-    def set_watch_window(self, x_start, width, y_start, height) -> None:
-        self._require_state(CameraState.OPEN)
-        self._do_set_watch_window(x_start, width, y_start, height)
-
-    def grab_frame(self) -> Optional[np.ndarray]:
-        self._require_state(CameraState.STREAMING)
-        return self._do_grab_frame()
-
-    def start_stream(self, max_fps: float = 30) -> None:
-        self._require_state(CameraState.OPEN)
-        self._do_start_stream(max_fps)
-        self._state = CameraState.STREAMING
-
-    def stop_stream(self) -> None:
-        self._require_state(CameraState.STREAMING)
-        self._do_stop_stream()
-        self._state = CameraState.OPEN
-
-    def grab_last_frame(self) -> Optional[np.ndarray]:
         try:
-            self._require_state(CameraState.OPEN, CameraState.STREAMING)
-            return self._do_grab_last_frame()
-        except CaptureError as c:
-            print(str(c))
-            return None
+            self._close()
+        finally:
+            self._is_open = False
+            self.cam = None
+
+    def watch(self, x_off: int, width: int, y_off: int, height: int):
+        if width <= 0 or height <= 0:
+            return False
+
+        if x_off < 0 or y_off < 0:
+            return False
+
+        try:
+            self._watch(x_off, width, y_off, height)
+        except Exception:
+            return False
+
+    def set(self, parameter: str, value: Any) -> bool:
+        """
+        Set a camera parameter (exposure, gain, fps, etc).
+        """
+        if not self._is_open:
+            raise InvalidStateError("Camera must be opened before setting parameters.")
+
+        try:
+            return bool(self._set(parameter, value))
+        except Exception as e:
+            raise CameraError(f"Failed to set parameter '{parameter}'") from e
+
+    def read(self) -> Tuple[bool, np.ndarray, float]:
+        """
+        Read a frame from the camera.
+
+        Returns:
+            success: bool
+            frame: ndarray or None
+            timestamp: perf_counter timestamp
+        """
+        if not self._is_open:
+            raise InvalidStateError("Camera must be opened before reading.")
+
+        timestamp = time.perf_counter()
+
+        try:
+            success, frame = self._read_frame()
+            return success, frame, timestamp
+        except Exception as e:
+            raise CaptureError("Failed to read frame.") from e
 
     @abstractmethod
-    def _do_open(self) -> None:
-        pass
+    def _open(self) -> None:
+        """
+        Backend-specific open.
+        Must raise on fatal failure.
+        """
+        ...
 
     @abstractmethod
-    def _do_close(self) -> None:
-        pass
+    def _close(self) -> None:
+        """
+        Backend-specific close.
+        """
+        ...
 
     @abstractmethod
-    def _do_set_parameter(self, key: str = "none", value: Any = None) -> None:
-        pass
+    def _set(self, parameter: str, value: Any) -> bool:
+        """
+        Backend-specific parameter setter.
+        Return False if unsupported or rejected.
+        """
+        ...
 
     @abstractmethod
-    def _do_set_framerate(self, fps: float) -> None:
-        pass
+    def _watch(self, x_off: int, width: int, y_off: int, height: int) -> bool:
+        """
+        Set an ROI within the camera.
+        """
+        ...
 
     @abstractmethod
-    def _do_grab_frame(self) -> np.ndarray:
-        pass
+    def _read_frame(self) -> Tuple[bool, np.ndarray]:
+        """
+        Backend-specific frame grab.
+        Must NOT raise on normal capture failure.
+        """
+        ...
 
-    @abstractmethod
-    def _do_set_watch_window(self, x_start, width, y_start, height) -> None:
-        pass
 
-    @abstractmethod
-    def _do_start_stream(self, max_fps: float = 30) -> None:
-        pass
+class CameraError(Exception):
+    """Base class for all camera-related errors."""
 
-    @abstractmethod
-    def _do_stop_stream(self) -> None:
-        pass
 
-    @abstractmethod
-    def _do_grab_last_frame(self) -> np.ndarray:
-        pass
+class InvalidStateError(CameraError):
+    """Invalid operation for the current camera state."""
+
+
+class CaptureError(CameraError):
+    """Frame capture failed."""

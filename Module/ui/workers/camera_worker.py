@@ -1,43 +1,43 @@
+from typing import Optional
 from PySide6.QtCore import QObject, Signal, Slot, QTimer
-from Module.io import __all__ as camera_names
+from Module.io.Camera import Camera
+from Module.io.IDSCamera import IDSCamera
+from Module.io.OpenCVCamera import OpenCVCamera
+from Module.io.TestCamera import TestCamera
 from Module.ui.utils.logger import logger
-import importlib
-
-
-camera_classes = {}
-for name in camera_names:
-    module = importlib.import_module(f"Module.io.{name}")
-    cls = getattr(module, name)
-    camera_classes[name] = cls
 
 
 class CameraWorker(QObject):
     frame_ready = Signal(object)
     camera_opened = Signal()
     camera_closed = Signal()
+    live_started = Signal()
+    live_stopped = Signal()
+    framerate_reverted = Signal(float)
 
     def __init__(self):
         super().__init__()
-        self.camera = None
-        self.timer = None
+        self.camera: Optional[Camera] = None
         self.streaming = False
+        self.requested_fps: float = 10.0
+        self.timer: Optional[QTimer] = None
 
     @Slot(str)
     def open_camera(self, camera_type: str):
         try:
-            key = f"{camera_type}Camera"
-            cls = camera_classes.get(key)
-
-            if cls is None:
+            if camera_type == "OpenCV":
+                self.camera = OpenCVCamera()
+            elif camera_type == "IDS":
+                self.camera = IDSCamera()
+            elif camera_type == "Test":
+                self.camera = TestCamera()
+            else:
                 logger.log_signal.emit(f"Unknown camera type: {camera_type}", "ERROR")
                 return
 
-            self.camera = cls()
-            # logger.log_signal.emit("Camera starting to open", "INFO")
-            self.camera.open()
-            self.camera.start_stream()
+            self.camera._open()  # open camera, does not start stream
             self.camera_opened.emit()
-            logger.log_signal.emit(f"{camera_type} opened", "INFO")
+            logger.log_signal.emit(f"{camera_type} camera opened", "INFO")
 
         except Exception as e:
             logger.log_signal.emit(f"Failed to open camera: {e}", "ERROR")
@@ -45,77 +45,79 @@ class CameraWorker(QObject):
 
     @Slot()
     def close_camera(self):
-        self.stop_stream()
-
         if self.camera:
-            try:
-                self.camera.close()
-                logger.log_signal.emit("Camera closed", "INFO")
-            except Exception as e:
-                logger.log_signal.emit(f"Error closing camera: {e}", "ERROR")
+            self.stop_stream()
+            self.camera._close()
+            self.camera = None
+            self.camera_closed.emit()
+            logger.log_signal.emit("Camera closed", "INFO")
 
-        self.camera = None
-        self.camera_closed.emit()
-
-    @Slot(int)
-    def start_stream(self):
-        if not self.camera:
-            logger.log_signal.emit("Cannot start stream: camera not open", "ERROR")
-            return
-
-        if self.timer is None:
-            self.timer = QTimer()
-            self.timer.timeout.connect(self._grab_frame)
-
-        # The interval can be derived from the camera's frame_rate property if it exists
-        interval_ms = (
-            int(1000 / self.camera.frame_rate)
-            if hasattr(self.camera, "frame_rate")
-            else 33
-        )
-        self.timer.start(interval_ms)
-        logger.log_signal.emit("Live stream started", "INFO")
-
-    @Slot(object)
-    def snap_image(self, save_path=None):
-        """Grab one frame, start streaming if needed."""
+    @Slot()
+    def snap_image(self):
         if not self.camera:
             logger.log_signal.emit("Cannot snap: camera not open", "ERROR")
             return
 
-        started_for_snap = False
+        temp_stream = False
         if not self.streaming:
-            self.start_stream()
-            started_for_snap = True
+            self.camera._start_stream(max_fps=self.requested_fps)
+            temp_stream = True
 
-        frame = self.camera._do_grab_frame()  # grab one frame
-        if save_path:
-            self.camera.save_frame(frame, save_path)
-        self.frame_ready.emit(frame)
-        logger.log_signal.emit("Snap taken", "INFO")
+        try:
+            frame = self.camera._grab_frame(timeout_s=1.0 / self.requested_fps)
+            self.frame_ready.emit(frame)
+            logger.log_signal.emit("Snap taken", "INFO")
+        except Exception as e:
+            logger.log_signal.emit(f"Snap failed: {e}", "ERROR")
+        finally:
+            if temp_stream:
+                self.camera._stop_stream()
 
-        # Stop temporary streaming if we started it just for Snap
-        if started_for_snap:
-            self.stop_stream()
+    @Slot(float)
+    def start_stream(self, fps: float):
+        if not self.camera:
+            logger.log_signal.emit("Cannot start stream: camera not open", "ERROR")
+            return
+
+        self.requested_fps = fps
+        self.camera._start_stream(max_fps=fps)
+        self.streaming = True
+        self.live_started.emit()
+        logger.log_signal.emit(f"Live stream started at {fps} FPS", "INFO")
 
     @Slot()
     def stop_stream(self):
-        if self.timer and self.timer.isActive():
-            self.timer.stop()
+        if self.camera and self.streaming:
+            self.camera._stop_stream()
+            self.streaming = False
+            self.live_stopped.emit()
             logger.log_signal.emit("Live stream stopped", "INFO")
 
-    def _grab_frame(self):
-        if self.camera:
-            frame = self.camera.grab_frame()
-            self.frame_ready.emit(frame)
-
     @Slot(str, object)
-    def update_setting(self, name, value):
+    def set_parameter(self, name, value):
+        """Set camera parameter safely. Stop/start stream if needed."""
         if not self.camera:
             return
+
+        was_streaming = self.streaming
+        if was_streaming:
+            self.camera._stop_stream()
 
         try:
             setattr(self.camera, name, value)
             logger.log_signal.emit(f"{name} set to {value}", "INFO")
         except Exception as e:
             logger.log_signal.emit(f"Failed to set {name}: {e}", "ERROR")
+        finally:
+            if was_streaming:
+                self.camera._start_stream(max_fps=self.requested_fps)
+
+    @Slot()
+    def grab_preview_frame(self):
+        """Pull the latest frame from a running stream for the UI."""
+        if self.camera and self.streaming:
+            frame = self.camera._grab_last_frame()
+            if frame is not None:
+                self.frame_ready.emit(frame)
+            else:
+                logger.log_signal.emit("No frame received", "WARNING")

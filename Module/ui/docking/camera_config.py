@@ -21,8 +21,9 @@ class CameraConfigDock(ConfigDock):
     request_watch_reset = Signal()
     request_snap = Signal()
     request_live = Signal()
+    request_live_stop = Signal()
 
-    def __init__(self, parent=None, console=None):
+    def __init__(self, parent=None):
         super().__init__("Camera Configuration", parent)
         self._build_camera_selection()
         self._build_camera_settings()
@@ -38,14 +39,15 @@ class CameraConfigDock(ConfigDock):
         self.reset_watch_window_btn.clicked.connect(self._reset_watch_window)
         self.snap_btn.clicked.connect(self._snap)
         self.live_btn.clicked.connect(self._live)
+        
+        self.cam_streaming = False
 
     def _build_camera_selection(self):
-        # ---------- Camera panel ----------
         camera_panel = ConfigPanel("Camera")
 
         camera_row = QHBoxLayout()
         self.camera_type = QComboBox()
-        self.camera_type.addItems(["OpenCV", "IDS", "Test"])
+        self.camera_type.addItems(["IDS", "OpenCV", "Test"])
 
         camera_row.addWidget(QLabel("Type"))
         camera_row.addWidget(self.camera_type)
@@ -53,7 +55,6 @@ class CameraConfigDock(ConfigDock):
 
         camera_panel.add_row(camera_row)
 
-        # ---------- Buttons ----------
         button_row = QHBoxLayout()
         self.open_btn = QPushButton("Open")
         self.close_btn = QPushButton("Close")
@@ -66,7 +67,6 @@ class CameraConfigDock(ConfigDock):
 
         camera_panel.add_row(button_row)
 
-        # ---------- Add to dock ----------
         self.add_panel(camera_panel)
 
     def _build_camera_settings(self):
@@ -97,7 +97,9 @@ class CameraConfigDock(ConfigDock):
         settings_panel.add_row(gain_row)
 
         self.frame_rate = QSpinBox()
-        self.frame_rate.setRange(1, 1000)
+        self.frame_rate.setSingleStep(1)
+        self.frame_rate.setValue(10)
+        self.frame_rate.setRange(1, 200)
         self.frame_rate.setSuffix(" fps")
         self.frame_rate.setEnabled(False)
 
@@ -227,6 +229,7 @@ class CameraConfigDock(ConfigDock):
 
         self.snap_btn = QPushButton("Snap")
         self.live_btn = QPushButton("Live")
+        self.live_btn.setCheckable(True)
 
         # Initially disable buttons until camera is opened
         self.snap_btn.setEnabled(False)
@@ -244,6 +247,7 @@ class CameraConfigDock(ConfigDock):
         self.add_panel(stream_panel)
 
     def _open_clicked(self):
+        #self.open_btn.setEnabled(False)
         self.request_open.emit(self.camera_type.currentText())
 
     def on_camera_open(self):
@@ -257,6 +261,7 @@ class CameraConfigDock(ConfigDock):
         self.camera_type.setEnabled(False)
 
     def _close_clicked(self):
+        #self.close_btn.setEnabled(False)
         self.request_close.emit()
 
     def on_camera_close(self):
@@ -270,12 +275,18 @@ class CameraConfigDock(ConfigDock):
         self.camera_type.setEnabled(True)
 
     def _exposure_changed(self):
+        if not self.exposure.isEnabled():
+            return
         self.request_exposure_change.emit(self.exposure.value())
 
     def _gain_changed(self):
+        if not self.gain.isEnabled():
+            return
         self.request_gain_change.emit(self.gain.value())
 
     def _frame_rate_changed(self):
+        if not self.frame_rate.isEnabled():
+            return
         self.request_frame_rate_change.emit(self.frame_rate.value())
 
     def _set_watch_window(self):
@@ -285,7 +296,29 @@ class CameraConfigDock(ConfigDock):
         self.request_watch_reset.emit()
 
     def _snap(self):
+        #self.snap_btn.setEnabled(False)
         self.request_snap.emit()
 
     def _live(self):
-        self.request_live.emit()
+        if not self.cam_streaming:
+            self.request_live.emit()
+        else:
+            self.request_live_stop.emit()
+        
+    def on_live_start(self):
+        self.cam_streaming = True
+        self.live_btn.setText("Stop")
+        self.live_btn.setStyleSheet(
+            "QPushButton { background-color: #28a745; color: white; }"
+        )  # green
+        self.snap_btn.setEnabled(False)
+        self.live_btn.setEnabled(True)
+        
+    def on_live_stopped(self):
+        self.cam_streaming = False
+        self.live_btn.setText("Live")
+        self.live_btn.setStyleSheet(
+            "QPushButton { background-color: #1E1E1E; color: #E0E0E0; }"
+        )  # normal dark
+        self.snap_btn.setEnabled(True)
+        self.live_btn.setEnabled(True)
