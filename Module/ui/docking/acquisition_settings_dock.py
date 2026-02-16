@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 from PySide6.QtCore import Qt
-from Module.ui.docking.docking_panel import ConfigPanel
+from Module.ui.docking.config_dock import ConfigPanel
 
 
 class AcquisitionSettingsDock(QDockWidget):

@@ -7,11 +7,10 @@ from PySide6.QtWidgets import (
     QSpinBox,
 )
 from PySide6.QtCore import Qt, Signal
-from Module.ui.docking.docking_panel import ConfigPanel, ConfigDock
+from Module.ui.docking.config_dock import ConfigPanel, ConfigDock
 from Module.ui.utils.logger import logger
 
 class CameraConfigDock(ConfigDock):
-    # Signals
     request_open = Signal(str)
     request_close = Signal()
     request_exposure_change = Signal(int)
@@ -39,7 +38,7 @@ class CameraConfigDock(ConfigDock):
         self.reset_watch_window_btn.clicked.connect(self._reset_watch_window)
         self.snap_btn.clicked.connect(self._snap)
         self.live_btn.clicked.connect(self._live)
-        
+
         self.cam_streaming = False
 
     def _build_camera_selection(self):
@@ -197,27 +196,6 @@ class CameraConfigDock(ConfigDock):
         # ---------- Add panel to dock ----------
         self.add_panel(watch_panel)
 
-    def _build_display(self):
-        output_panel = ConfigPanel("Display")
-        # Row for buttons
-        button_row = QHBoxLayout()
-
-        self.snap_btn = QPushButton("Snap")
-        self.live_btn = QPushButton("Live")
-
-        # Initially disable buttons until camera is open
-        self.snap_btn.setEnabled(False)
-        self.live_btn.setEnabled(False)
-
-        button_row.addWidget(self.snap_btn)
-        button_row.addWidget(self.live_btn)
-        button_row.addStretch()  # push buttons to the left
-
-        output_panel.add_row(button_row)
-
-        # Add the panel to the dock
-        self.add_panel(output_panel)
-
     def _build_stream_settings(self):
         """
         Builds the panel containing Snap and Live buttons for camera output.
@@ -247,7 +225,7 @@ class CameraConfigDock(ConfigDock):
         self.add_panel(stream_panel)
 
     def _open_clicked(self):
-        #self.open_btn.setEnabled(False)
+        # self.open_btn.setEnabled(False)
         self.request_open.emit(self.camera_type.currentText())
 
     def on_camera_open(self):
@@ -259,9 +237,11 @@ class CameraConfigDock(ConfigDock):
         self.gain.setEnabled(True)
         self.frame_rate.setEnabled(True)
         self.camera_type.setEnabled(False)
+        self.watch_aspect_ratio.setEnabled(True)
+        self.set_watch_window_btn.setEnabled(True)
 
     def _close_clicked(self):
-        #self.close_btn.setEnabled(False)
+        # self.close_btn.setEnabled(False)
         self.request_close.emit()
 
     def on_camera_close(self):
@@ -273,6 +253,8 @@ class CameraConfigDock(ConfigDock):
         self.gain.setEnabled(False)
         self.frame_rate.setEnabled(False)
         self.camera_type.setEnabled(True)
+        self.set_watch_window_btn.setEnabled(False)
+        self.reset_watch_window_btn.setEnabled(False)
 
     def _exposure_changed(self):
         if not self.exposure.isEnabled():
@@ -291,20 +273,28 @@ class CameraConfigDock(ConfigDock):
 
     def _set_watch_window(self):
         self.request_watch_set.emit()
+        
+    def on_watch_window_set(self):
+        self.set_watch_window_btn.setEnabled(False)
+        self.reset_watch_window_btn.setEnabled(True)
 
     def _reset_watch_window(self):
         self.request_watch_reset.emit()
 
+    def on_watch_window_reset(self):
+        self.set_watch_window_btn.setEnabled(True)
+        self.reset_watch_window_btn.setEnabled(False)
+
     def _snap(self):
-        #self.snap_btn.setEnabled(False)
+        # self.snap_btn.setEnabled(False)
         self.request_snap.emit()
 
     def _live(self):
-        if not self.cam_streaming:
+        if self.live_btn.isChecked():
             self.request_live.emit()
         else:
             self.request_live_stop.emit()
-        
+
     def on_live_start(self):
         self.cam_streaming = True
         self.live_btn.setText("Stop")
@@ -313,7 +303,7 @@ class CameraConfigDock(ConfigDock):
         )  # green
         self.snap_btn.setEnabled(False)
         self.live_btn.setEnabled(True)
-        
+
     def on_live_stopped(self):
         self.cam_streaming = False
         self.live_btn.setText("Live")

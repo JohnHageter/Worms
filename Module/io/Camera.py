@@ -4,8 +4,20 @@ import numpy as np
 import time
 
 
-class Camera(ABC):
 
+
+class Camera(ABC):
+    """
+    Docstring for Camera
+    
+    :var cam: camera type object for specific backend
+    :var watch_window: ROI from camera to use for image capture
+    :function open: opens the camera
+    :function close: closes the camera
+    :function watch: sets the watch window
+    :function set: sets camera parameter (exposure, gain, fps)
+    :function read: reads and returns image data as an np.ndarray (success, frame, timestamp)
+    """
     def __init__(self):
         self.cam = None
         self.watch_window = None #x_off, width, y_off, height
@@ -48,6 +60,7 @@ class Camera(ABC):
 
         try:
             self._watch(x_off, width, y_off, height)
+            return True
         except Exception:
             return False
 
