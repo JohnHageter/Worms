@@ -15,8 +15,9 @@ class CameraWorker(QObject):
     live_stopped = Signal()
     framerate_reverted = Signal(float)
     frames_dropped = Signal(int)
-    watch_window_set = Signal()
-    watch_window_reset = Signal()
+    camera_watch_window_set = Signal()
+    camera_watch_window_reset = Signal()
+    camera_watch_window_updated = Signal(QRect)
 
     def __init__(self):
         super().__init__()
@@ -136,21 +137,26 @@ class CameraWorker(QObject):
     def set_watch_window(self, rect: QRect):
         if not self.camera:
             return
-        
+
         if rect.isNull():
             self.camera.watch_window = None
         else:
-            self.camera.watch(rect.x(),
+            self.camera.watch(
+                rect.x(),
                 rect.width(),
                 rect.y(),
-                rect.height(),)
-            self.watch_window_set.emit()
+                rect.height(),
+            )
+            self.camera_watch_window_set.emit()
 
     @Slot()
     def reset_watch_window(self):
         if not self.camera:
             return
-        
-        self.camera.watch(-1,-1,-1,-1)
+
+        self.camera.watch(None)
         logger.log_signal.emit("Reset Watch window", "INFO")
-        self.watch_window_reset.emit()
+
+        #Bypass camera worker and just emit empty rectangle
+        self.camera_watch_window_updated.emit(QRect())
+        self.camera_watch_window_reset.emit()

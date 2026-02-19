@@ -1,119 +1,176 @@
-import cv2
-import numpy as np
-import os
+from __future__ import annotations
+
+import json
+import shutil
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from tqdm import tqdm
-from Module.utils import create_writer
+from typing import Dict, List, Literal, TypedDict, cast
 
-def open_dataset(video_path) -> cv2.VideoCapture:
-    if not Path(video_path).exists():
-        raise ValueError(f"Video file {video_path} does not exist.")
-
-    cap = cv2.VideoCapture(str(video_path), )
-    if not cap.isOpened():
-        raise ValueError(f"Could not open video file {video_path}.")
-
-    return cap
-
-def generate_dataset_from_timelapse(
-    folder_path: str | Path,
-    output_file_name: str = "dataset.mp4",
-    frame_rate: float = 10.0,
-):
-    folder_path = Path(folder_path)
-
-    if not folder_path.exists():
-        raise IOError("Dataset folder does not exist.")
-    if not output_file_name.endswith(".mp4"):
-        output_file_name += ".mp4"
-
-    image_paths = sorted(
-        p
-        for p in folder_path.iterdir()
-        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
-    )
-
-    if not image_paths:
-        raise IOError("No images found in dataset folder.")
-
-    first = cv2.imread(str(image_paths[0]))
-    if first is None:
-        raise IOError(f"Failed to read {image_paths[0]}")
-
-    h, w = first.shape[:2]
-
-    writer = create_writer(
-        file=str(folder_path / output_file_name),
-        width=w,
-        height=h,
-        frame_rate=frame_rate,
-    )
-
-    try:
-        for path in tqdm(image_paths, desc="Writing video", unit="frame"):
-            image = cv2.imread(str(path))
-            if image is None:
-                raise IOError(f"Failed to read {path}")
-
-            if image.shape[:2] != (h, w):
-                raise ValueError(f"Image size mismatch: {path}")
-
-            writer.write(image)
-
-    finally:
-        writer.release()
-
-def crop_well_from_image(image, well) -> np.ndarray:
-    H, W = image.shape[:2]
-    x,y,r = well
-
-    r = int(round(r))
-    x = int(round(x))
-    y = int(round(y))
-    size = 2 * r
-
-    cropped = np.zeros((size, size), dtype=image.dtype)
-
-    x1_src = max(x - r, 0)
-    x2_src = min(x + r, W)
-    y1_src = max(y - r, 0)
-    y2_src = min(y + r, H)
-
-    x1_dst = max(0, r - x)
-    y1_dst = max(0, r - y)
-    x2_dst = x1_dst + (x2_src - x1_src)
-    y2_dst = y1_dst + (y2_src - y1_src)
-
-    cropped[y1_dst:y2_dst, x1_dst:x2_dst] = image[y1_src:y2_src, x1_src:x2_src]
-
-    return cropped
-
-def expand_well_radius(wells, scale=1.2):
-    expanded = []
-    for x, y, r in wells:
-        r_new = r * scale
-        expanded.append((x, y, r_new))
-    return expanded
+import h5py
 
 
-def get_image_paths(folder):
-    type = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
-
-    files = [
-        os.path.join(folder, f)
-        for f in os.listdir(folder)
-        if Path(f).suffix.lower() in type
-    ]
-
-    return sorted(files)
+H5Mode = Literal["r", "r+", "w", "w-", "x", "a"]
 
 
-# Unsure of final frame rate. Barring num of frames can range from 5000 to 1000000
-# only work with individual frames at a time instead of loading all frames at once.
-def load_frame(image_path, scale=1.0):
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise ValueError(f"Could not load image from {image_path}")
-    if scale != 1.0:
-        img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    return img
+class ExperimentData(TypedDict):
+    acquisition_parameters: Dict[str, object]
+    tracking_parameters: Dict[str, object]
+    video_paths: List[Path]
+    csv_paths: List[Path]
+
+
+@dataclass(frozen=True)
+class ExperimentPaths:
+    root: Path
+    metadata_file: Path
+    videos_dir: Path
+    csv_dir: Path
+
+
+class ExperimentDataset:
+
+    def __init__(self, root_dir: str | Path, mode: H5Mode = "a") -> None:
+        self._paths = self._build_paths(Path(root_dir))
+
+        if mode in ("w", "w-", "x"):
+            self._create_structure()
+
+        self._h5: h5py.File = h5py.File(self._paths.metadata_file, mode)
+
+        if mode in ("w", "w-", "x"):
+            self._initialize_file()
+
+        self._acquisition_ds: h5py.Dataset = cast(
+            h5py.Dataset, self._h5["acquisition_parameters"]
+        )
+        self._tracking_ds: h5py.Dataset = cast(
+            h5py.Dataset, self._h5["tracking_parameters"]
+        )
+        self._videos_ds: h5py.Dataset = cast(h5py.Dataset, self._h5["videos"])
+        self._csv_ds: h5py.Dataset = cast(h5py.Dataset, self._h5["csv_files"])
+
+
+    @staticmethod
+    def _build_paths(root: Path) -> ExperimentPaths:
+        return ExperimentPaths(
+            root=root,
+            metadata_file=root / "metadata.h5",
+            videos_dir=root / "videos",
+            csv_dir=root / "csv",
+        )
+
+    def _create_structure(self) -> None:
+        self._paths.root.mkdir(parents=True, exist_ok=True)
+        self._paths.videos_dir.mkdir(exist_ok=True)
+        self._paths.csv_dir.mkdir(exist_ok=True)
+
+
+    def _initialize_file(self) -> None:
+        string_dt = h5py.string_dtype(encoding="utf-8")
+
+        self._h5.attrs["created"] = datetime.utcnow().isoformat()
+        self._h5.attrs["version"] = "1.0"
+
+        self._h5.create_dataset(
+            "acquisition_parameters",
+            data=json.dumps({}),
+            dtype=string_dt,
+        )
+
+        self._h5.create_dataset(
+            "tracking_parameters",
+            data=json.dumps({}),
+            dtype=string_dt,
+        )
+
+        self._h5.create_dataset(
+            "videos",
+            shape=(0,),
+            maxshape=(None,),
+            dtype=string_dt,
+        )
+
+        self._h5.create_dataset(
+            "csv_files",
+            shape=(0,),
+            maxshape=(None,),
+            dtype=string_dt,
+        )
+
+        self._h5.flush()
+
+
+    def set_acquisition_parameters(self, parameters: Dict[str, object]) -> None:
+        self._acquisition_ds[...] = json.dumps(parameters)
+        self._h5.flush()
+
+    def set_tracking_parameters(self, parameters: Dict[str, object]) -> None:
+        self._tracking_ds[...] = json.dumps(parameters)
+        self._h5.flush()
+
+
+    def add_video(self, video_path: str | Path) -> Path:
+        src = Path(video_path)
+        if not src.exists():
+            raise FileNotFoundError(src)
+
+        dest = self._paths.videos_dir / src.name
+        shutil.copy2(src, dest)
+
+        self._append_string(self._videos_ds, dest.name)
+        return dest
+
+
+    def add_csv(self, csv_path: str | Path) -> Path:
+        src = Path(csv_path)
+        if not src.exists():
+            raise FileNotFoundError(src)
+
+        dest = self._paths.csv_dir / src.name
+        shutil.copy2(src, dest)
+
+        self._append_string(self._csv_ds, dest.name)
+        return dest
+
+
+    def load(self) -> ExperimentData:
+        acquisition_raw = self._acquisition_ds[()]
+        tracking_raw = self._tracking_ds[()]
+
+        acquisition = json.loads(acquisition_raw.decode())
+        tracking = json.loads(tracking_raw.decode())
+
+        video_names = self._read_string_array(self._videos_ds)
+        csv_names = self._read_string_array(self._csv_ds)
+
+        video_paths = [self._paths.videos_dir / name for name in video_names]
+        csv_paths = [self._paths.csv_dir / name for name in csv_names]
+
+        return {
+            "acquisition_parameters": acquisition,
+            "tracking_parameters": tracking,
+            "video_paths": video_paths,
+            "csv_paths": csv_paths,
+        }
+
+
+    def _append_string(self, dataset: h5py.Dataset, value: str) -> None:
+        current_size = dataset.shape[0]
+        dataset.resize((current_size + 1,))
+        dataset[current_size] = value
+        self._h5.flush()
+
+    @staticmethod
+    def _read_string_array(dataset: h5py.Dataset) -> List[str]:
+        return [item.decode() for item in dataset[()]]
+
+
+    def close(self) -> None:
+        self._h5.close()
+
+    def __enter__(self) -> "ExperimentDataset":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()

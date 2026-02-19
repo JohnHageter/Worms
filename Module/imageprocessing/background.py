@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from Module.dataset.Dataset import load_frame
+from Module.dataset.video import load_frame
 
 
 def snap_background(image, window=11, smooth_iters=3):

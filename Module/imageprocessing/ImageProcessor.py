@@ -1,5 +1,5 @@
 import numpy as np
-from Module.dataset.Dataset import load_frame
+from Module.dataset.video import load_frame
 import cv2
 from skimage.morphology import skeletonize
 from collections import defaultdict, deque

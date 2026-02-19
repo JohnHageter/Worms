@@ -5,7 +5,8 @@ import numpy as np
 
 
 class CameraPreviewLabel(QLabel):
-    watch_window_changed = Signal(QRect)  # emits the final rectangle
+    watch_window_drawn = Signal(QRect)  # emits the final rectangle
+    watch_window_draw_state = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -40,6 +41,7 @@ class CameraPreviewLabel(QLabel):
             self.start_point = event.position().toPoint()
             self.end_point = self.start_point
             self.drawing = True
+            self.watch_window_draw_state.emit("Drawing")
 
     def mouseMoveEvent(self, event):
         if self.drawing and self.start_point:
@@ -71,7 +73,8 @@ class CameraPreviewLabel(QLabel):
 
                 frame_rect = self.label_rect_to_frame_rect(rect)
 
-                self.watch_window_changed.emit(frame_rect)
+                self.watch_window_draw_state.emit("Idle")
+                self.watch_window_drawn.emit(frame_rect)
 
             self.set_overlay(QRect())
 
@@ -102,9 +105,6 @@ class CameraPreviewLabel(QLabel):
 
         pixmap_size = self.pixmap.size()
         label_size = self.size()
-
-        scale_w = pixmap_size.width() / label_size.width()
-        scale_h = pixmap_size.height() / label_size.height()
 
         scaled = self.pixmap.scaled(
             label_size,

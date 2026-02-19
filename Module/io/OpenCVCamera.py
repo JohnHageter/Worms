@@ -61,6 +61,8 @@ class OpenCVCamera(Camera):
         self.watch_window = x_off, width, y_off, height
         return True
 
+    def _reset_watch_window(self):
+        self.watch_window = None
 
     def _read_frame(self) -> tuple[bool, Optional[np.ndarray]]:
         if not self.cap:

@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
+from re import X
 from typing import Optional, Any, Tuple
 import numpy as np
 import time
-
-
 
 
 class Camera(ABC):
@@ -51,14 +50,14 @@ class Camera(ABC):
             self._is_open = False
             self.cam = None
 
-    def watch(self, x_off: int, width: int, y_off: int, height: int):
-        if width <= 0 or height <= 0:
-            return False
-
-        if x_off < 0 or y_off < 0:
-            return False
-
+    def watch(self, x_off = None, width = None, y_off = None, height = None):
         try:
+            if width is None or height is None or x_off is None or y_off is None:
+                self._reset_watch_window()
+                return True
+
+            if width <= 0 or height <= 0 or x_off < 0 or y_off < 0:
+                return False
             self._watch(x_off, width, y_off, height)
             return True
         except Exception:
@@ -87,7 +86,6 @@ class Camera(ABC):
         """
         if not self._is_open:
             raise InvalidStateError("Camera must be opened before reading.")
-
 
         try:
             success, frame = self._read_frame()
@@ -123,6 +121,13 @@ class Camera(ABC):
     def _watch(self, x_off: int, width: int, y_off: int, height: int) -> bool:
         """
         Set an ROI within the camera.
+        """
+        ...
+
+    @abstractmethod
+    def _reset_watch_window(self):
+        """
+        Reset the watch window to the full field view of the camera.
         """
         ...
 

@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 from PySide6.QtCore import Qt
-from Module.ui.docking.config_dock import ConfigPanel
 
 
 class AcquisitionSettingsDock(QDockWidget):
@@ -44,11 +43,11 @@ class AcquisitionSettingsDock(QDockWidget):
     def add_panel(self, panel: QWidget):
         self._layout.insertWidget(self._layout.count() - 1, panel)
 
-    # ---------- Timelapse Acquisition Panel ----------
+    # Timelapse
     def _build_timelapse_panel(self):
         self.timelapse_panel = QGroupBox("Timelapse Acquisition")
         self.timelapse_panel.setCheckable(True)
-        self.timelapse_panel.setChecked(True)  # maybe start enabled
+        self.timelapse_panel.setChecked(True)  #start enabled
         layout = QVBoxLayout(self.timelapse_panel)
 
         # Duration (minutes)
@@ -73,7 +72,7 @@ class AcquisitionSettingsDock(QDockWidget):
         interval_row.addStretch()
         layout.addLayout(interval_row)
 
-        # Save directory with browse
+        # Save directory
         save_dir_row = QHBoxLayout()
         self.timelapse_save_dir = QLineEdit()
         self.browse_save_dir_btn = QPushButton("Browse")
@@ -82,7 +81,7 @@ class AcquisitionSettingsDock(QDockWidget):
         save_dir_row.addWidget(self.browse_save_dir_btn)
         layout.addLayout(save_dir_row)
 
-        # Output format (MP4 / PNG)
+        # Output format
         format_row = QHBoxLayout()
         self.timelapse_format = QComboBox()
         self.timelapse_format.addItems(["PNG", "MP4"])
@@ -132,7 +131,7 @@ class AcquisitionSettingsDock(QDockWidget):
 
         self.add_panel(self.timelapse_panel)
 
-    # ---------- Video Acquisition Panel ----------
+    # Video acquisition
     def _build_video_panel(self):
         self.video_panel = QGroupBox("Video Acquisition")
         self.video_panel.setCheckable(True)

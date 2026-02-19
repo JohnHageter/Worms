@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSpinBox,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Slot, QRect
 from Module.ui.docking.config_dock import ConfigPanel, ConfigDock
 from Module.ui.utils.logger import logger
 
@@ -101,6 +101,10 @@ class CameraConfigDock(ConfigDock):
         self.frame_rate.setRange(1, 200)
         self.frame_rate.setSuffix(" fps")
         self.frame_rate.setEnabled(False)
+        self.frame_rate.lineEdit().setMaximumWidth(40)
+        self.frame_rate.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self.frame_rate.setButtonSymbols(QSpinBox.ButtonSymbols.PlusMinus)
+        self.frame_rate.setCursor(Qt.CursorShape.ArrowCursor)
 
         frame_rate_row = QHBoxLayout()
         frame_rate_row.addWidget(QLabel("Frame rate"))
@@ -114,7 +118,6 @@ class CameraConfigDock(ConfigDock):
     def _build_watch_window_settings(self):
         watch_panel = ConfigPanel("Watch Window")
 
-        # ---------- Set / Reset buttons ----------
         button_row = QHBoxLayout()
 
         self.set_watch_window_btn = QPushButton("Set")
@@ -129,7 +132,6 @@ class CameraConfigDock(ConfigDock):
 
         watch_panel.add_row(button_row)
 
-        # ---------- Aspect ratio ----------
         aspect_row = QHBoxLayout()
 
         self.watch_aspect_ratio = QComboBox()
@@ -149,7 +151,6 @@ class CameraConfigDock(ConfigDock):
 
         watch_panel.add_row(aspect_row)
 
-        # ---------- Explicit size ----------
         size_row = QHBoxLayout()
 
         self.watch_width = QSpinBox()
@@ -171,7 +172,6 @@ class CameraConfigDock(ConfigDock):
 
         watch_panel.add_row(size_row)
 
-        # ---------- Feedback: drawing state ----------
         feedback_row = QHBoxLayout()
 
         self.watch_draw_state = QLabel("Idle")
@@ -182,7 +182,6 @@ class CameraConfigDock(ConfigDock):
 
         watch_panel.add_row(feedback_row)
 
-        # ---------- Feedback: dimensions ----------
         dimensions_row = QHBoxLayout()
 
         self.watch_dimensions = QLabel("-- × -- px")
@@ -228,6 +227,7 @@ class CameraConfigDock(ConfigDock):
         # self.open_btn.setEnabled(False)
         self.request_open.emit(self.camera_type.currentText())
 
+    @Slot()
     def on_camera_open(self):
         self.open_btn.setEnabled(False)
         self.close_btn.setEnabled(True)
@@ -244,6 +244,7 @@ class CameraConfigDock(ConfigDock):
         # self.close_btn.setEnabled(False)
         self.request_close.emit()
 
+    @Slot()
     def on_camera_close(self):
         self.open_btn.setEnabled(True)
         self.close_btn.setEnabled(False)
@@ -273,7 +274,8 @@ class CameraConfigDock(ConfigDock):
 
     def _set_watch_window(self):
         self.request_watch_set.emit()
-        
+     
+    @Slot()    
     def on_watch_window_set(self):
         self.set_watch_window_btn.setEnabled(False)
         self.reset_watch_window_btn.setEnabled(True)
@@ -281,9 +283,20 @@ class CameraConfigDock(ConfigDock):
     def _reset_watch_window(self):
         self.request_watch_reset.emit()
 
+    @Slot()
     def on_watch_window_reset(self):
         self.set_watch_window_btn.setEnabled(True)
         self.reset_watch_window_btn.setEnabled(False)
+        
+    @Slot(QRect)
+    def update_watch_dimensions(self, rect: QRect):
+        self.watch_width.setValue(rect.width())
+        self.watch_height.setValue(rect.height())
+        self.watch_dimensions.setText(f"{rect.width()} x {rect.height()} px")
+        
+    @Slot(str)
+    def update_watch_draw_state(self, state: str):
+        self.watch_draw_state.setText(state)
 
     def _snap(self):
         # self.snap_btn.setEnabled(False)
@@ -295,6 +308,7 @@ class CameraConfigDock(ConfigDock):
         else:
             self.request_live_stop.emit()
 
+    @Slot()
     def on_live_start(self):
         self.cam_streaming = True
         self.live_btn.setText("Stop")
@@ -304,6 +318,7 @@ class CameraConfigDock(ConfigDock):
         self.snap_btn.setEnabled(False)
         self.live_btn.setEnabled(True)
 
+    @Slot()
     def on_live_stopped(self):
         self.cam_streaming = False
         self.live_btn.setText("Live")

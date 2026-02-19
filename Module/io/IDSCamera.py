@@ -73,22 +73,22 @@ class IDSCamera(Camera):
     def _set_framerate(self, fps) -> bool:
         if fps <= 0:
             raise CameraError("Frame rate must be above 0")
-        
+
         if not self._remote_map:
             raise CameraError("Camera not open.")
-        
+
         # We just free run the camera and make sure that we're not exceeding hardware capabilities.
         # limit frame rate by pulling at necessary intervals elsewhere
         try:
             node = self._remote_map.FindNode("AcquisitionFrameRate")
             max_fps = node.Maximum()
             min_fps = node.Minimum()
-            
+
             fps = max(min(fps, max_fps), min_fps)
             node.SetValue(fps)
             applied = node.Value()
             self._camera_fps = applied
-            
+
             return abs(applied - fps) < 1e3
         except Exception:
             return False
@@ -103,6 +103,20 @@ class IDSCamera(Camera):
         )
         width = min(width, self._remote_map.FindNode("Width").Maximum() - x_start)
         height = min(height, self._remote_map.FindNode("Height").Maximum() - y_start)
+        self._remote_map.FindNode("OffsetX").SetValue(x_start)
+        self._remote_map.FindNode("OffsetY").SetValue(y_start)
+        self._remote_map.FindNode("Width").SetValue(width)
+        self._remote_map.FindNode("Height").SetValue(height)
+        self.watch_window = x_start, width, y_start, height
+
+    def _reset_watch_window(self):
+        if not self._remote_map:
+            return
+
+        x_start = 0
+        y_start = 0
+        width = self._remote_map.FindNode("Width").Maximum()
+        height = self._remote_map.FindNode("Height").Maximum()
         self._remote_map.FindNode("OffsetX").SetValue(x_start)
         self._remote_map.FindNode("OffsetY").SetValue(y_start)
         self._remote_map.FindNode("Width").SetValue(width)
@@ -126,8 +140,7 @@ class IDSCamera(Camera):
 
         except Exception:
             return False, None
-        
-        
+
     ### IDS Helpers for base class
 
     def _prepare_datastream(self):

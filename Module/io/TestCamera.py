@@ -120,3 +120,7 @@ class TestCamera(Camera):
         x1 = min(x0 + self.watch_w, frame.shape[1])
         y1 = min(y0 + self.watch_h, frame.shape[0])
         return frame[y0:y1, x0:x1]
+
+    def _reset_watch_window(self):
+        self.watch_h = 480
+        self.watch_w = 640

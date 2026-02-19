@@ -38,7 +38,7 @@ class TimelapseApp(QMainWindow):
         self.tabifyDockWidget(self.camera_dock, self.acquisition_dock)
         self.camera_dock.raise_()
 
-        # ---------- Camera Worker ----------
+        # Camera Worker
         self.camera_thread = QThread()
         self.camera_worker = CameraWorker()
         self.camera_worker.moveToThread(self.camera_thread)
@@ -77,22 +77,25 @@ class TimelapseApp(QMainWindow):
 
         # Watch window singaling
         self.camera_dock.request_watch_set.connect(self._handle_watch_set)
-        self.preview_dock.watch_window_changed.connect(
-            self.camera_worker.set_watch_window
-        )
-
-        self.camera_dock.request_watch_reset.connect(
-            self.preview_dock.reset_watch_window
+        self.preview_dock.image_label.watch_window_drawn.connect(self.camera_worker.set_watch_window)
+        self.camera_worker.camera_watch_window_set.connect(self.camera_dock.on_watch_window_set)
+        
+        self.camera_dock.request_watch_reset.connect(self.camera_worker.reset_watch_window)
+        self.camera_worker.camera_watch_window_reset.connect(self.camera_dock.on_watch_window_reset)
+        
+        self.preview_dock.image_label.watch_window_draw_state.connect(
+            self.camera_dock.update_watch_draw_state
         )
         
-        self.camera_worker.watch_window_set.connect(
-            self.camera_dock.on_watch_window_set
+        self.preview_dock.image_label.watch_window_drawn.connect(
+            self.camera_dock.update_watch_dimensions
         )
-        self.camera_worker.watch_window_reset.connect(
-            self.camera_dock.on_watch_window_reset
+        
+        self.camera_worker.camera_watch_window_updated.connect(
+            self.camera_dock.update_watch_dimensions
         )
-
-
+        
+        
     def _handle_watch_set(self):
         aspect_text = self.camera_dock.watch_aspect_ratio.currentText()
         self.preview_dock.start_watch_drawing(aspect_text)
