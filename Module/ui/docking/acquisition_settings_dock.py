@@ -13,11 +13,13 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QFileDialog,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 
 
 class AcquisitionSettingsDock(QDockWidget):
     """Dock for acquisition-specific settings with Timelapse and Video sections."""
+    request_run_video = Signal()
+
 
     def __init__(self, parent=None, console=None):
         super().__init__("Acquisition Settings", parent)
@@ -39,6 +41,7 @@ class AcquisitionSettingsDock(QDockWidget):
 
         self.timelapse_panel.toggled.connect(self._on_timelapse_toggled)
         self.video_panel.toggled.connect(self._on_video_toggled)
+        
 
     def add_panel(self, panel: QWidget):
         self._layout.insertWidget(self._layout.count() - 1, panel)
@@ -219,7 +222,6 @@ class AcquisitionSettingsDock(QDockWidget):
         layout.addLayout(run_row)
 
         self.add_panel(self.video_panel)
-
 
     def _on_timelapse_toggled(self, checked: bool):
         if checked:

@@ -8,7 +8,7 @@ import time
 class Camera(ABC):
     """
     Docstring for Camera
-    
+
     :var cam: camera type object for specific backend
     :var watch_window: ROI from camera to use for image capture
     :function open: opens the camera
@@ -17,9 +17,12 @@ class Camera(ABC):
     :function set: sets camera parameter (exposure, gain, fps)
     :function read: reads and returns image data as an np.ndarray (success, frame, timestamp)
     """
+
     def __init__(self):
         self.cam = None
-        self.watch_window = None #x_off, width, y_off, height
+        self.watch_window: Optional[Tuple[
+            float, float, float, float
+        ]] = None # x_off, width, y_off, height
         self._is_open: bool = False
 
     def open(self) -> bool:
@@ -50,7 +53,7 @@ class Camera(ABC):
             self._is_open = False
             self.cam = None
 
-    def watch(self, x_off = None, width = None, y_off = None, height = None):
+    def watch(self, x_off=None, width=None, y_off=None, height=None):
         try:
             if width is None or height is None or x_off is None or y_off is None:
                 self._reset_watch_window()
@@ -87,12 +90,11 @@ class Camera(ABC):
         if not self._is_open:
             raise InvalidStateError("Camera must be opened before reading.")
 
-        try:
-            success, frame = self._read_frame()
-            timestamp = time.perf_counter()
-            return success, frame, timestamp
-        except Exception as e:
-            raise CaptureError("Failed to read frame.") from e
+
+        success, frame = self._read_frame()
+        timestamp = time.perf_counter()
+        return success, frame, timestamp
+
 
     @abstractmethod
     def _open(self) -> None:

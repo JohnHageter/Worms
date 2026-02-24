@@ -1,6 +1,11 @@
+from pathlib import Path
+
 from PySide6.QtWidgets import QMainWindow, QSizePolicy
 from PySide6.QtGui import QFont
 from PySide6.QtCore import Qt, QThread, QTimer
+from pydantic import InstanceOf
+from Module.io.Camera import Camera
+from Module.protocol.video_acquisition import VideoAcquisition, VideoProtocolConfig
 from Module.ui.docking.camera_preview_dock import CameraPreviewDock
 from Module.ui.docking.camera_config_dock import CameraConfigDock
 from Module.ui.docking.acquisition_settings_dock import AcquisitionSettingsDock
@@ -77,25 +82,74 @@ class TimelapseApp(QMainWindow):
 
         # Watch window singaling
         self.camera_dock.request_watch_set.connect(self._handle_watch_set)
-        self.preview_dock.image_label.watch_window_drawn.connect(self.camera_worker.set_watch_window)
-        self.camera_worker.camera_watch_window_set.connect(self.camera_dock.on_watch_window_set)
-        
-        self.camera_dock.request_watch_reset.connect(self.camera_worker.reset_watch_window)
-        self.camera_worker.camera_watch_window_reset.connect(self.camera_dock.on_watch_window_reset)
-        
+        self.preview_dock.image_label.watch_window_drawn.connect(
+            self.camera_worker.set_watch_window
+        )
+        self.camera_worker.camera_watch_window_set.connect(
+            self.camera_dock.on_watch_window_set
+        )
+
+        self.camera_dock.request_watch_reset.connect(
+            self.camera_worker.reset_watch_window
+        )
+        self.camera_worker.camera_watch_window_reset.connect(
+            self.camera_dock.on_watch_window_reset
+        )
+
         self.preview_dock.image_label.watch_window_draw_state.connect(
             self.camera_dock.update_watch_draw_state
         )
-        
+
         self.preview_dock.image_label.watch_window_drawn.connect(
             self.camera_dock.update_watch_dimensions
         )
-        
+
         self.camera_worker.camera_watch_window_updated.connect(
             self.camera_dock.update_watch_dimensions
         )
-        
-        
+
+        self.acquisition_dock.video_run_btn.clicked.connect(self._handle_run_video)
+
     def _handle_watch_set(self):
         aspect_text = self.camera_dock.watch_aspect_ratio.currentText()
         self.preview_dock.start_watch_drawing(aspect_text)
+
+    def _handle_run_video(self):
+        video_duration = self.acquisition_dock.video_duration.value()
+        num_videos = self.acquisition_dock.video_number.value()
+        interval = self.acquisition_dock.video_interval.value()
+        name_prefix = self.acquisition_dock.video_prefix.text()
+        save_dir = Path(self.acquisition_dock.video_save_dir.text())
+
+        camera = self.camera_worker.camera
+        exposure = self.camera_dock.exposure.value()
+        gain = self.camera_dock.gain.value()
+        fps = self.camera_dock.frame_rate.value()
+        if self.camera_worker.camera is not None:
+            watch_window = self.camera_worker.camera.watch_window
+        else:
+            watch_window = None
+
+        assert camera is not None
+        config = VideoProtocolConfig(
+            save_dir,
+            video_duration,
+            num_videos,
+            interval,
+            name_prefix,
+            camera,
+            exposure,
+            gain,
+            fps,
+            watch_window,
+        )
+
+        protocol = VideoAcquisition(camera, config)
+        self.console_dock.log("Video acquisition started.", "INFO")
+        
+        try:
+            protocol.start()
+        except Exception as e:
+            self.console_dock.log(str(e), "ERROR")
+        
+        self.console_dock.log("Video acquisition complete", "INFO")

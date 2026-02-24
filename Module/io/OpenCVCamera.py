@@ -65,28 +65,13 @@ class OpenCVCamera(Camera):
         self.watch_window = None
 
     def _read_frame(self) -> tuple[bool, Optional[np.ndarray]]:
-        if not self.cap:
+        if self.cap is None or not self.cap.isOpened():
             raise CameraError("Cannot read frame while camera is closed.")
 
-        latest_frame = None
-        while True:
-            ret, frame = self.cap.read()  
-            if not ret or frame is None:
-                break
-            latest_frame = frame  
+        ret, frame = self.cap.read()
 
-            # If driver is fast and more frames exist, loop again
-            # For most backends, read() will block until next frame
-            # So effectively this will usually grab just one
-
-            # Break if there’s nothing immediately available
-            # But OpenCV doesn't provide a non-blocking check
-            break
-
-        if latest_frame is None:
+        if not ret or frame is None:
             return False, None
-
-        frame = latest_frame
 
         if self.watch_window is not None:
             x_off, width, y_off, height = self.watch_window
