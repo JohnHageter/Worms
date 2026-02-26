@@ -41,6 +41,8 @@ class AcquisitionSettingsDock(QDockWidget):
 
         self.timelapse_panel.toggled.connect(self._on_timelapse_toggled)
         self.video_panel.toggled.connect(self._on_video_toggled)
+        self.browse_save_dir_btn.clicked.connect(self.select_save_dir)
+        self.video_browse_btn.clicked.connect(self.select_save_dir)
         
 
     def add_panel(self, panel: QWidget):
@@ -222,6 +224,17 @@ class AcquisitionSettingsDock(QDockWidget):
         layout.addLayout(run_row)
 
         self.add_panel(self.video_panel)
+
+    def select_save_dir(self):
+        dir = QFileDialog.getExistingDirectory(
+            self,
+            "Select Save Directory",
+            self.timelapse_save_dir.text() or "",
+            QFileDialog.Option.ShowDirsOnly
+        )
+        
+        if dir:
+            self.timelapse_save_dir.setText(dir)
 
     def _on_timelapse_toggled(self, checked: bool):
         if checked:
