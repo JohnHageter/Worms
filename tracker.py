@@ -7,17 +7,28 @@ from Module.imageprocessing.foreground import extract_foreground
 from Module.utils import *
 from Module.dataset.Dataset import *
 from Module.imageprocessing.ImageProcessor import *
-from Module.detection.Arena import detect_wells, detect_wells_interactive, WellDetectionParams
+from Module.detection.Arena import (
+    detect_wells,
+    detect_wells_interactive,
+    WellDetectionParams,
+)
 import csv
-from pprint import pprint
+from collections import defaultdict
 
-# generate_dataset_from_timelapse("Data/image_data/timelapse_images_4", frame_rate=60)
+# generate_dataset_from_timelapse(
+#     "D:/Sachi/T1 4233A raw images/timelapse_images"
+# )
+video = open_dataset("D:/Sachi/T2 4233A White Light/timelapse_images_WL/Trial1_WL.mp4")
 
-video = open_dataset("Data/image_data/timelapse_images_4/dataset.mp4")
+# ---- output directories ----
+output_dir = Path("D:/Sachi/T2 4233A White Light/timelapse_images_WL/output")
+frames_dir = output_dir / "frames"
+tracks_dir = output_dir / "tracks"
 
-output_dir = Path("./outputs/timelapse_images_4_outputs")
-output_dir.mkdir(parents=True, exist_ok=True)
+frames_dir.mkdir(parents=True, exist_ok=True)
+tracks_dir.mkdir(parents=True, exist_ok=True)
 
+# ---- background ----
 background = sample_background(video, n_frames=200)
 background = background.astype(np.uint8)
 
@@ -32,22 +43,23 @@ params = WellDetectionParams(
     max_radius=117,
 )
 
-wells, masks, params = detect_wells(video, params)
+wells, masks, params = detect_wells_interactive(video, params)
 wells = expand_well_radius(wells, 1.2)
 
 tracker = WormTracker(max_dist=300, max_missed=100)
+
 track_records = []
-print("tracking")
 frame_idx = 0
+
 video.set(cv2.CAP_PROP_POS_FRAMES, 0)
-writer = None
+
+print("tracking")
 
 while True:
     ret, img = video.read()
     if not ret:
         break
 
-    # If frames are color and your pipeline expects grayscale
     if img.ndim == 3:
         img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -96,23 +108,14 @@ while True:
             1,
         )
 
+    # ---- save frame as PNG ----
+    frame_path = frames_dir / f"frame_{frame_idx:06d}.png"
+    cv2.imwrite(str(frame_path), cv2.resize(visual, (W//2, H//2), cv2.INTER_AREA))
+
     cv2.imshow(
         "Video",
         cv2.resize(visual, (W // 2, H // 2), cv2.INTER_AREA),
     )
-
-    if writer is None:
-        out = output_dir / "tracked_video.mp4"
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(
-            str(out),
-            fourcc,
-            30,
-            (W, H),
-            isColor=True,
-        )
-
-    writer.write(visual)
 
     for t in worm_tracks:
         cx, cy = t.last_centroid
@@ -136,18 +139,15 @@ while True:
             }
         )
 
-    if cv2.waitKey(10) & 0xFF == 27:  # ESC to quit
+    if cv2.waitKey(1) & 0xFF == 27:
         break
 
     frame_idx += 1
 
-
 video.release()
 cv2.destroyAllWindows()
 
-print(f"Saving tracking results to ./outputs/worm_tracks.csv")
-output_csv = Path("./outputs/worm_tracks.csv")
-
+# ---- save per-track CSVs ----
 fields = [
     "frame",
     "time (min)",
@@ -168,26 +168,9 @@ for row in track_records:
     tracks_by_id[row["track_id"]].append(row)
 
 for track_id, rows in tracks_by_id.items():
-    out_file = output_dir / f"track_{track_id:04d}.csv"
+    out_file = tracks_dir / f"track_{track_id:04d}.csv"
 
     with open(out_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-
-
-# with open(output_csv, "w", newline="") as f:
-#     writer = csv.DictWriter(
-#         f,
-#         fieldnames=[
-#             "frame", "time (min)", "track_id", "well_id",
-#             "center_x", "center_y",
-#             "end1_x", "end1_y",
-#             "end2_x", "end2_y",
-#             "age", "missed"
-#         ]
-#     )
-#     writer.writeheader()
-#     writer.writerows(track_records)
-
-#sidufhsidfuhusd
