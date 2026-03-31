@@ -5,12 +5,16 @@ class WormTrack:
     def __init__(self, track_id, worm, frame_idx):
         self.id = track_id
         self.last_centroid = np.array(worm["centroid"], dtype=float)
-        self.last_end1 = worm["end1"]
-        self.last_end2 = worm["end2"]
+
+        self.head = worm["end1"]
+        self.tail = worm["end2"]
+
         self.last_frame = frame_idx
         self.age = 1
         self.missed = 0
         self.well_id = worm["well_id"]
+
+        self.velocity = np.zeros(2)
 
 
 class WormTracker:
@@ -44,7 +48,7 @@ class WormTracker:
                 used_worms.add(best)
 
         return matches, used_tracks, used_worms
-    
+
     def order_endpoints(self, end1, end2, prev_end1, prev_end2):
         if end1 is None or end2 is None:
             return end1, end2
@@ -52,12 +56,57 @@ class WormTracker:
             return end1, end2
 
         # Assign end1 to whichever is closer to previous end1
-        if np.hypot(end2[0]-prev_end1[0], end2[1]-prev_end1[1]) < \
-        np.hypot(end1[0]-prev_end1[0], end1[1]-prev_end1[1]):
+        if np.hypot(end2[0] - prev_end1[0], end2[1] - prev_end1[1]) < np.hypot(
+            end1[0] - prev_end1[0], end1[1] - prev_end1[1]
+        ):
             # swap
             return end2, end1
         return end1, end2
 
+
+    def assign_head_tail(self, t, centroid, endA, endB):
+        if endA is None or endB is None:
+            return t.head, t.tail
+
+        centroid = np.array(centroid, dtype=float)
+        prev_centroid = t.last_centroid
+
+        # --- Update smoothed velocity ---
+        step = centroid - prev_centroid
+        t.velocity = 0.7 * t.velocity + 0.3 * step
+
+        if np.linalg.norm(t.velocity) < 1e-3:
+            # Too little motion → keep previous assignment
+            return t.head, t.tail
+
+        # --- Candidate vectors ---
+        vA = np.array(endA) - centroid
+        vB = np.array(endB) - centroid
+
+        # --- Alignment with motion ---
+        dotA = np.dot(vA, t.velocity)
+        dotB = np.dot(vB, t.velocity)
+
+        # --- Choose head based on motion direction ---
+        if dotA > dotB:
+            new_head, new_tail = endA, endB
+        else:
+            new_head, new_tail = endB, endA
+
+        # --- Anti-flip stabilization ---
+        # Only switch if clearly better than previous head
+        if t.head is not None:
+            prev_vec = np.array(t.head) - centroid
+            prev_score = np.dot(prev_vec, t.velocity)
+
+            new_vec = np.array(new_head) - centroid
+            new_score = np.dot(new_vec, t.velocity)
+
+            # Require margin to flip
+            if new_score < prev_score * 1.2:
+                return t.head, t.tail
+
+        return new_head, new_tail
 
     def update(self, worms, frame_idx):
         by_well = {}
@@ -73,17 +122,20 @@ class WormTracker:
                 t = well_tracks[ti]
                 w = dets[di]
 
-                e1, e2 = self.order_endpoints(
-                    w["end1"], w["end2"],
-                    t.last_end1, t.last_end2
+                head, tail = self.assign_head_tail(
+                    t,
+                    w["centroid"],
+                    w["end1"],
+                    w["end2"]
                 )
 
+                t.head = head
+                t.tail = tail
                 t.last_centroid = np.array(w["centroid"], dtype=float)
-                t.last_end1 = e1
-                t.last_end2 = e2
                 t.last_frame = frame_idx
                 t.age += 1
                 t.missed = 0
+
 
             for t in well_tracks:
                 if t not in [well_tracks[ti] for ti in used_tracks]:

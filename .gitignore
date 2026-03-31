@@ -10,3 +10,4 @@ Module/__pycache__/
 outputs/
 Data/
 *.pyc
+.vscode/
