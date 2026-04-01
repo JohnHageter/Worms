@@ -12,7 +12,7 @@ def snap_background(image, window=11, smooth_iters=3):
     return bg
 
 
-def sample_background(image_data, n_frames=300, seed=None):
+def sample_background_im(image_data, n_frames=300, seed=None):
     if seed is not None:
         np.random.seed(seed)
 
@@ -20,15 +20,14 @@ def sample_background(image_data, n_frames=300, seed=None):
     n_frames = min(n_frames, total_frames)
     indicies = np.random.choice(total_frames, size = n_frames, replace = False)
 
-
     frames = []
     for idx in indicies:
         frame = load_frame(image_data[idx]).astype(np.float32)
         frame = (frame - frame.min()) / (frame.max() - frame.min() + 1e-12) 
         frames.append(frame)
-    
+
     stack = np.stack(frames, axis=0)
     bg = np.median(stack, axis=0)
     bg = (bg * 255).astype(np.uint8)
-    
+
     return bg

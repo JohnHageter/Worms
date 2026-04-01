@@ -1,53 +1,117 @@
 from abc import ABC
 import datetime
 from pathlib import Path
-from typing import Optional, Any
+from tqdm import tqdm
+from Module.utils import create_writer
 
-import h5py
+def open_dataset(video_path) -> cv2.VideoCapture:
+    if not Path(video_path).exists():
+        raise ValueError(f"Video file {video_path} does not exist.")
+
+    cap = cv2.VideoCapture(str(video_path), )
+    if not cap.isOpened():
+        raise ValueError(f"Could not open video file {video_path}.")
+
+    return cap
+
+def generate_dataset_from_timelapse(
+    folder_path: str | Path,
+    output_file_name: str = "dataset.mp4",
+    frame_rate: float = 10.0,
+):
+    folder_path = Path(folder_path)
+
+    if not folder_path.exists():
+        raise IOError("Dataset folder does not exist.")
+    if not output_file_name.endswith(".mp4"):
+        output_file_name += ".mp4"
+
+    image_paths = sorted(
+        p
+        for p in folder_path.iterdir()
+        if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".tif", ".tiff"}
+    )
+
+    if not image_paths:
+        raise IOError("No images found in dataset folder.")
+
+    first = cv2.imread(str(image_paths[0]))
+    if first is None:
+        raise IOError(f"Failed to read {image_paths[0]}")
+
+    h, w = first.shape[:2]
+
+    writer = create_writer(
+        file=str(folder_path / output_file_name),
+        width=w,
+        height=h,
+        frame_rate=frame_rate,
+    )
+
+    try:
+        for path in tqdm(image_paths, desc="Writing video", unit="frame"):
+            image = cv2.imread(str(path))
+            if image is None:
+                raise IOError(f"Failed to read {path}")
+
+            if image.shape[:2] != (h, w):
+                raise ValueError(f"Image size mismatch: {path}")
+
+            writer.write(image)
+
+    finally:
+        writer.release()
+
+def crop_well_from_image(image, well) -> np.ndarray:
+    H, W = image.shape[:2]
+    x,y,r = well
+
+    r = int(round(r))
+    x = int(round(x))
+    y = int(round(y))
+    size = 2 * r
+
+    cropped = np.zeros((size, size), dtype=image.dtype)
+
+    x1_src = max(x - r, 0)
+    x2_src = min(x + r, W)
+    y1_src = max(y - r, 0)
+    y2_src = min(y + r, H)
+
+    x1_dst = max(0, r - x)
+    y1_dst = max(0, r - y)
+    x2_dst = x1_dst + (x2_src - x1_src)
+    y2_dst = y1_dst + (y2_src - y1_src)
+
+    cropped[y1_dst:y2_dst, x1_dst:x2_dst] = image[y1_src:y2_src, x1_src:x2_src]
+
+    return cropped
+
+def expand_well_radius(wells, scale=1.2):
+    expanded = []
+    for x, y, r in wells:
+        r_new = r * scale
+        expanded.append((x, y, r_new))
+    return expanded
+
+def get_image_paths(folder):
+    type = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
+
+    files = [
+        os.path.join(folder, f)
+        for f in os.listdir(folder)
+        if Path(f).suffix.lower() in type
+    ]
+
+    return sorted(files)
 
 
-class Dataset(ABC):
-    def __init__(self, root: Path = Path(".")):
-        self.root = root
-        self.metadata = self.root / "metadata.h5"
-        self.capture = self.root / "acquisition"
-        self.tracking = self.root / "tracks"
-
-        self._h5: Optional[h5py.File] = None
-
-    def create(self, overwrite: bool = False) -> None:
-        if self.metadata.exists() and not overwrite:
-            raise FileExistsError(f"{self.metadata} already exists.")
-
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.capture.mkdir(exist_ok=True)
-        self.tracking.mkdir(exist_ok=True)
-
-        self._h5 = h5py.File(self.metadata, "w")
-
-        self._h5.create_group("camera")
-        self._h5.create_group("acquisition")
-
-        timestamp = datetime.datetime.now().isoformat(timespec="seconds")
-        self._h5.attrs["created"] = timestamp
-
-        self._h5.flush()
-
-    def write_attr(self, key: str, value: Any, group: Optional[str] = None):
-        if self._h5 is None:
-            raise RuntimeError("HDF5 file not created.")
-
-        target = self._h5 if group is None else self._h5.require_group(group)
-        target.attrs[key] = value
-        self._h5.flush()
-
-
-if __name__ == "__main__":
-    d = Dataset(root=Path("dataout"))
-
-    print(d.metadata.absolute())
-    print(d.capture.absolute())
-
-    d.create()
-
-    timestamp = d._h5.attrs["created"]
+# Unsure of final frame rate. Barring num of frames can range from 5000 to 1000000
+# only work with individual frames at a time instead of loading all frames at once.
+def load_frame(image_path, scale=1.0):
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"Could not load image from {image_path}")
+    if scale != 1.0:
+        img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    return img

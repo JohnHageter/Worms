@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 import numpy as np
 
 
@@ -9,10 +11,16 @@ class WormTrack:
         self.head = worm["end1"]
         self.tail = worm["end2"]
 
+
+        self.head = worm["end1"]
+        self.tail = worm["end2"]
+
         self.last_frame = frame_idx
         self.age = 1
         self.missed = 0
         self.well_id = worm["well_id"]
+
+        self.velocity = np.zeros(2)
 
         self.velocity = np.zeros(2)
 
@@ -49,6 +57,7 @@ class WormTracker:
 
         return matches, used_tracks, used_worms
 
+
     def order_endpoints(self, end1, end2, prev_end1, prev_end2):
         if end1 is None or end2 is None:
             return end1, end2
@@ -63,7 +72,13 @@ class WormTracker:
             return end2, end1
         return end1, end2
 
-    def assign_head_tail(self, t, centroid, endA, endB):
+    def assign_head_tail(
+        self,
+        t,
+        centroid: Tuple[int,int],
+        endA: Optional[Tuple[int, int]],
+        endB: Optional[Tuple[int, int]],
+    ):
         if endA is None or endB is None:
             return t.head, t.tail
 
@@ -106,6 +121,22 @@ class WormTracker:
                 return t.head, t.tail
 
         return new_head, new_tail
+            new_head, new_tail = endB, endA
+
+        # --- Anti-flip stabilization ---
+        # Only switch if clearly better than previous head
+        if t.head is not None:
+            prev_vec = np.array(t.head) - centroid
+            prev_score = np.dot(prev_vec, t.velocity)
+
+            new_vec = np.array(new_head) - centroid
+            new_score = np.dot(new_vec, t.velocity)
+
+            # Require margin to flip
+            if new_score < prev_score * 1.2:
+                return t.head, t.tail
+
+        return new_head, new_tail
 
     def update(self, worms, frame_idx):
         by_well = {}
@@ -122,9 +153,14 @@ class WormTracker:
                 w = dets[di]
 
                 head, tail = self.assign_head_tail(
-                    t, w["centroid"], w["end1"], w["end2"]
+                    t,
+                    w["centroid"],
+                    w["end1"],
+                    w["end2"]
                 )
 
+                t.head = head
+                t.tail = tail
                 t.head = head
                 t.tail = tail
                 t.last_centroid = np.array(w["centroid"], dtype=float)

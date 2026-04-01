@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from dataclasses import dataclass, replace
+from pprint import pprint
 
 @dataclass(frozen=True)
 class WellDetectionParams:
@@ -108,7 +109,6 @@ def detect_wells_interactive(
     window_name: str = "Well Detection (Interactive)",
 ):
 
-    # Read first frame only
     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
     ret, frame = cap.read()
     if not ret:
@@ -121,7 +121,6 @@ def detect_wells_interactive(
     def nothing(_):
         pass
 
-    # ---- Trackbars ----
     cv2.createTrackbar(
         "well_tolerance x100",
         window_name,
@@ -140,7 +139,6 @@ def detect_wells_interactive(
     cv2.createTrackbar("max_radius", window_name, params.max_radius, 500, nothing)
 
     last_params = params
-    last_update = 0.0
     wells, masks = [], []
 
     while True:
@@ -189,6 +187,7 @@ def detect_wells_interactive(
 
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC
+            pprint(params)
             break
 
     cv2.destroyWindow(window_name)

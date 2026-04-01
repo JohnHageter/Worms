@@ -1,12 +1,13 @@
+# Working with Trial1 White light
+
 import cv2
 import numpy as np
 from pathlib import Path
 from Module.Worms import WormTracker
-from Module.detection.Arena import detect_wells
 from Module.imageprocessing.background import sample_background
 from Module.imageprocessing.foreground import extract_foreground
 from Module.utils import *
-from Module.dataset.video import *
+from Module.dataset.Dataset import *
 from Module.imageprocessing.ImageProcessor import *
 from Module.detection.Arena import (
     detect_wells,
@@ -16,11 +17,13 @@ from Module.detection.Arena import (
 import csv
 from collections import defaultdict
 
-generate_dataset_from_timelapse("D:/Sachi/T3/video_0036_output/frames")
-video = open_dataset("D:/Sachi/T3/T3_4233A_first/video_0036.mp4")
+# generate_dataset_from_timelapse(
+#     "D:/Sachi/T1 4233A raw images/timelapse_images"
+# )
+video = open_dataset("D:/Sachi/T2 4233A White Light/timelapse_images_WL/Trial1_WL.mp4")
 
 # ---- output directories ----
-output_dir = Path("D:/Sachi/T3/video_0036_output/")
+output_dir = Path("D:/Sachi/T2 4233A White Light/timelapse_images_WL/output")
 frames_dir = output_dir / "frames"
 tracks_dir = output_dir / "tracks"
 
@@ -29,7 +32,6 @@ tracks_dir.mkdir(parents=True, exist_ok=True)
 
 # ---- background ----
 background = sample_background(video, n_frames=200)
-# cv2.imshow("bg", background)
 background = background.astype(np.uint8)
 
 params = WellDetectionParams(
@@ -39,12 +41,12 @@ params = WellDetectionParams(
     min_dist=50,
     hough_param1=24,
     hough_param2=25,
-    min_radius=24,
-    max_radius=150,
+    min_radius=10,
+    max_radius=117,
 )
 
-wells, masks, params = detect_wells(video, params)
-wells = expand_well_radius(wells, 1.1)
+wells, masks, params = detect_wells_interactive(video, params)
+wells = expand_well_radius(wells, 1.2)
 
 tracker = WormTracker(max_dist=300, max_missed=100)
 
@@ -65,13 +67,8 @@ while True:
 
     H, W = img.shape
 
-    fg, thresh = extract_foreground(img, background, thresh_val=10)
+    fg, thresh = extract_foreground(img, background, thresh_val=35)
     num_labels, labels, stats, centroids = find_components(thresh)
-
-    cv2.imshow("fg", cv2.resize(fg, (W // 2, H // 2), interpolation=cv2.INTER_AREA))
-    cv2.imshow(
-        "thresh", cv2.resize(thresh, (W // 2, H // 2), interpolation=cv2.INTER_AREA)
-    )
 
     worms = build_worms(
         labels,
@@ -81,41 +78,21 @@ while True:
         minimum_skeleton_area=100,
     )
 
-    worms_to_keep = filter_worms(worms, min_area=20)
+    worms_to_keep = filter_worms(worms, min_area=10)
     worm_tracks = tracker.update(worms_to_keep, frame_idx=frame_idx)
 
     visual = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
-    for t in worm_tracks:
-        cx, cy = map(int, t.last_centroid)
+    for worm in worms_to_keep:
+        cx, cy = map(int, worm["centroid"])
+        end1 = tuple(map(int, worm["end1"])) if worm["end1"] is not None else None
+        end2 = tuple(map(int, worm["end2"])) if worm["end2"] is not None else None
 
-        if t.head is not None:
-            head = (int(t.head[0]), int(t.head[1]))
-        else:
-            head = None
-
-        if t.tail is not None:
-            tail = (int(t.tail[0]), int(t.tail[1]))
-        else:
-            tail = None
-
-        # Centroid (green)
         cv2.circle(visual, (cx, cy), 3, (0, 255, 0), -1)
 
-        if head is not None and tail is not None:
-            size = 4
-
-            # Head = square (blue)
-            cv2.rectangle(
-                visual,
-                (head[0] - size, head[1] - size),
-                (head[0] + size, head[1] + size),
-                (255, 0, 0),
-                -1,
-            )
-
-            # Tail = circle (red)
-            cv2.circle(visual, tail, 3, (0, 0, 255), -1)
+        if end1 is not None and end2 is not None:
+            cv2.circle(visual, end1, 3, (255, 0, 0), -1)
+            cv2.circle(visual, end2, 3, (0, 0, 255), -1)
 
     for well in wells:
         x, y, r = map(int, well)
@@ -133,18 +110,19 @@ while True:
             1,
         )
 
+    # ---- save frame as PNG ----
     frame_path = frames_dir / f"frame_{frame_idx:06d}.png"
-    cv2.imwrite(str(frame_path), cv2.resize(visual, (W // 2, H // 2), interpolation=cv2.INTER_AREA))
+    cv2.imwrite(str(frame_path), cv2.resize(visual, (W//2, H//2), cv2.INTER_AREA))
 
     cv2.imshow(
         "Video",
-        cv2.resize(visual, (W // 2, H // 2), interpolation=cv2.INTER_AREA),
+        cv2.resize(visual, (W // 2, H // 2), cv2.INTER_AREA),
     )
 
     for t in worm_tracks:
         cx, cy = t.last_centroid
-        e1 = t.head
-        e2 = t.tail
+        e1 = t.last_end1
+        e2 = t.last_end2
 
         track_records.append(
             {
