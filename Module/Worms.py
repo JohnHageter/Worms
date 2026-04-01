@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 import numpy as np
 
 
@@ -63,8 +65,13 @@ class WormTracker:
             return end2, end1
         return end1, end2
 
-
-    def assign_head_tail(self, t, centroid, endA, endB):
+    def assign_head_tail(
+        self,
+        t,
+        centroid: Tuple[int,int],
+        endA: Optional[Tuple[int, int]],
+        endB: Optional[Tuple[int, int]],
+    ):
         if endA is None or endB is None:
             return t.head, t.tail
 
@@ -135,7 +142,6 @@ class WormTracker:
                 t.last_frame = frame_idx
                 t.age += 1
                 t.missed = 0
-
 
             for t in well_tracks:
                 if t not in [well_tracks[ti] for ti in used_tracks]:

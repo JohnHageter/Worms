@@ -67,8 +67,10 @@ while True:
     fg, thresh = extract_foreground(img, background, thresh_val=10)
     num_labels, labels, stats, centroids = find_components(thresh)
 
-    cv2.imshow("fg", cv2.resize(fg, (W // 2, H // 2), cv2.INTER_AREA))
-    cv2.imshow("thresh", cv2.resize(thresh, (W // 2, H // 2), cv2.INTER_AREA))
+    cv2.imshow("fg", cv2.resize(fg, (W // 2, H // 2), interpolation=cv2.INTER_AREA))
+    cv2.imshow(
+        "thresh", cv2.resize(thresh, (W // 2, H // 2), interpolation=cv2.INTER_AREA)
+    )
 
     worms = build_worms(
         labels,
@@ -86,8 +88,15 @@ while True:
     for t in worm_tracks:
         cx, cy = map(int, t.last_centroid)
 
-        head = tuple(map(int, t.head)) if t.head is not None else None
-        tail = tuple(map(int, t.tail)) if t.tail is not None else None
+        if t.head is not None:
+            head = (int(t.head[0]), int(t.head[1]))
+        else:
+            head = None
+
+        if t.tail is not None:
+            tail = (int(t.tail[0]), int(t.tail[1]))
+        else:
+            tail = None
 
         # Centroid (green)
         cv2.circle(visual, (cx, cy), 3, (0, 255, 0), -1)
@@ -124,11 +133,11 @@ while True:
         )
 
     frame_path = frames_dir / f"frame_{frame_idx:06d}.png"
-    cv2.imwrite(str(frame_path), cv2.resize(visual, (W // 2, H // 2), cv2.INTER_AREA))
+    cv2.imwrite(str(frame_path), cv2.resize(visual, (W // 2, H // 2), interpolation=cv2.INTER_AREA))
 
     cv2.imshow(
         "Video",
-        cv2.resize(visual, (W // 2, H // 2), cv2.INTER_AREA),
+        cv2.resize(visual, (W // 2, H // 2), interpolation=cv2.INTER_AREA),
     )
 
     for t in worm_tracks:
