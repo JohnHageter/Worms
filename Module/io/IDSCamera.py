@@ -1,47 +1,59 @@
+from enum import Enum
 import numpy as np
 import cv2
 from ids_peak import ids_peak as peak
 from ids_peak_ipl import ids_peak_ipl as peak_ipl
 from Module.io.Camera import Camera, CameraError
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 
+class Mode(Enum):
+    SINGLE_SHOT = 0
+    CONTINUOUS = 1
 
 class IDSCamera(Camera):
     def __init__(self, index=0):
         super().__init__()
         peak.Library.Initialize()
         self._index = index
-        self.device_manager = peak.DeviceManager.Instance()
-        self._m_device = None
-        self._remote_device = None
-        self._remote_map = None
-        self._datastream = None
-        self._continuous_acquisition = False
-        self._single_acquisition = True
-        self._latest_frame: Optional[np.ndarray] = None
+        self._device_manager: peak.DeviceManager = peak.DeviceManager.Instance()
+        self._cam: peak.Device
+        self._remote_device: peak.RemoteDevice
+        self._remote_map: peak.NodeMap
+        self._datastream: peak.DataStream
+        self._latest_frame: Optional[np.ndarray]
+        self._mode: Mode = Mode.CONTINUOUS
+        
+        self.frame_rate: float
+        self.exposure: float
+        self.gain: float
+        self.watch_window: Tuple[float,float,float,float]
 
     def _open(self) -> None:
-        self.device_manager.Update()
-        if self.device_manager.Devices().empty():
+        self._device_manager.Update()
+        if self._device_manager.Devices().empty():
             raise CameraError("No IDS Peak camera found")
 
-        self._m_device = self.device_manager.Devices()[self._index].OpenDevice(
+        self._cam = self._device_manager.Devices()[self._index].OpenDevice(
             peak.DeviceAccessType_Control
         )
 
-        self._remote_device = self._m_device.RemoteDevice()
-        self._remote_map = self._remote_device.NodeMaps()[self._index]
-        self.width = self._remote_map.FindNode("Width").Value()
-        self.height = self._remote_map.FindNode("Height").Value()
-        self.watch_window = 0, self.width, 0, self.height
-        self.cam = self._m_device
+        self._remote_device = self._cam.RemoteDevice()
+        self._remote_map = self._remote_device.NodeMaps()[0]
+        width = self._remote_map.FindNode("Width").Value()
+        height = self._remote_map.FindNode("Height").Value()
+        self.watch_window = (0, width, 0, height)
+        
+        self.exposure = self._node_value("ExposureTime")
+        
+        gain_selector: peak.
+        self._remote_map.FindNode("GainSelector").SetCurrentEntry("AnalogAll")
+        self.gain = self._node_value("Gain")
 
-        self._datasteam = None
         self._latest_frame = None
         self._continuous = False
 
     def _close(self) -> None:
-        del self._m_device
+        del self._cam
         peak.Library.Close()
 
     def _set(self, key, value) -> bool:
@@ -124,7 +136,7 @@ class IDSCamera(Camera):
         self.watch_window = x_start, width, y_start, height
 
     def _read_frame(self) -> Tuple[bool, np.ndarray | None]:
-        if not self._m_device or not self._remote_map:
+        if not self._cam or not self._remote_map:
             return False, None
 
         try:
@@ -144,9 +156,9 @@ class IDSCamera(Camera):
     ### IDS Helpers for base class
 
     def _prepare_datastream(self):
-        if not self._m_device or not self._remote_map:
+        if not self._cam or not self._remote_map:
             return
-        self._datastream = self._m_device.DataStreams()[self._index].OpenDataStream()
+        self._datastream = self._cam.DataStreams()[self._index].OpenDataStream()
         payload = self._remote_map.FindNode("PayloadSize").Value()
         num_buffers = self._datastream.NumBuffersAnnouncedMinRequired()
         for _ in range(num_buffers):
@@ -193,3 +205,9 @@ class IDSCamera(Camera):
         frame = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
         self._latest_frame = frame
         return frame
+
+
+    def _node_value(self, key: str) -> Any:
+        node = self._remote_map.FindNode(key)
+        value = node.Value()
+        return value

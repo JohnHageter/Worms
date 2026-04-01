@@ -12,7 +12,7 @@ def snap_background(image, window=11, smooth_iters=3):
     return bg
 
 
-def sample_background_im(image_data, n_frames=300, seed=None):
+def sample_background(image_data, n_frames=300, seed=None):
     if seed is not None:
         np.random.seed(seed)
 

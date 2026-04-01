@@ -3,8 +3,14 @@ import datetime
 from pathlib import Path
 from tqdm import tqdm
 from Module.utils import create_writer
+import cv2
+import numpy as np
+import os
 
-def open_dataset(video_path) -> cv2.VideoCapture:
+def open_video(video_path) -> cv2.VideoCapture:
+    '''
+    Opens a single video from a path
+    '''
     if not Path(video_path).exists():
         raise ValueError(f"Video file {video_path} does not exist.")
 
@@ -19,6 +25,10 @@ def generate_dataset_from_timelapse(
     output_file_name: str = "dataset.mp4",
     frame_rate: float = 10.0,
 ):
+    '''
+    Takes a folder of single images and merges them into a single mp4.
+    '''
+    
     folder_path = Path(folder_path)
 
     if not folder_path.exists():
@@ -63,6 +73,12 @@ def generate_dataset_from_timelapse(
         writer.release()
 
 def crop_well_from_image(image, well) -> np.ndarray:
+    '''
+    Crops a single well from an image based on the ROI
+    
+    well: x,y,r
+    '''
+    
     H, W = image.shape[:2]
     x,y,r = well
 

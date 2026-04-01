@@ -1,9 +1,18 @@
 from abc import ABC, abstractmethod
+from enum import Enum
 from re import X
 from typing import Optional, Any, Tuple
 import numpy as np
 import time
 
+class Paramter(Enum):
+    FRAME_RATE = 0
+    EXPOSURE = 1
+    GAIN = 2
+    WIDTH = 3
+    HEIGHT = 4
+    X_OFFSET = 5
+    Y_OFFSET = 6
 
 class Camera(ABC):
     """
