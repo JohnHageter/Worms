@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT))
+
 import cv2
 import numpy as np
 from pathlib import Path
@@ -17,8 +23,8 @@ from Module.detection.Arena import (
 import csv
 from collections import defaultdict
 
-generate_dataset_from_timelapse("D:/Sachi/T3/video_0036_output/frames")
-video = open_dataset("D:/Sachi/T3/T3_4233A_first/video_0036.mp4")
+# generate_dataset_from_timelapse("D:/Sachi/T3/video_0036_output/frames")
+video = open_dataset("D:/Sachi/T3/week_1/video_0036.mp4")
 
 # ---- output directories ----
 output_dir = Path("D:/Sachi/T3/video_0036_output/")
