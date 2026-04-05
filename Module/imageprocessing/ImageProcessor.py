@@ -3,6 +3,7 @@ from Module.dataset.video import load_frame
 import cv2
 from skimage.morphology import skeletonize
 from collections import defaultdict, deque
+from Module.Worms import WormDetection
 
 
 def blob_metrics(binary):
@@ -138,17 +139,17 @@ def build_worms(labels, stats, centroids, wells, minimum_skeleton_area=10):
         )
 
         worms.append(
-            {
-                "well_id": well_id,
-                "mask": mask,
-                "bbox": (x, y, w, h),
-                "area": area,
-                "centroid": (cx, cy),
-                "curve_centroid": curve_centroid,
-                "end1": end1,
-                "end2": end2,
-                "curve_length": curve_length,
-            }
+            WormDetection(
+                centroid=(cx, cy),
+                curve_centroid=curve_centroid,
+                end1=end1,
+                end2=end2,
+                area=area,
+                mask=mask,
+                bbox=(x, y, w, h),
+                curve_length=curve_length,
+                well_id=well_id,
+            )
         )
 
     return worms
@@ -158,11 +159,12 @@ def filter_worms(worms, min_area=10, max_area=500, min_thickness=1):
     kept = []
 
     for worm in worms:
-        area = worm["area"]
+        # Access attributes via dot notation
+        area = worm.area
         if area < min_area or area > max_area:
             continue
 
-        dist_map = cv2.distanceTransform(worm["mask"], cv2.DIST_L2, 5)
+        dist_map = cv2.distanceTransform(worm.mask, cv2.DIST_L2, 5)
         if dist_map.max() < min_thickness:
             continue
 

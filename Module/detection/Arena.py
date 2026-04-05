@@ -158,7 +158,6 @@ def detect_wells_interactive(
         wells, masks = _detect_wells_core(gray, p)
         last_params = p
 
-
         disp = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         for i, (x, y, r) in enumerate(wells):
             xi, yi, ri = int(round(x)), int(round(y)), int(round(r))
@@ -192,3 +191,56 @@ def detect_wells_interactive(
 
     cv2.destroyWindow(window_name)
     return wells, masks, last_params
+
+
+def draw_wells(frame, initial_radius=50):
+    """
+    Interactive well placement on a frame.
+
+    Controls:
+        - Move mouse: well preview follows cursor
+        - '+' / '-': increase/decrease radius
+        - Left click: confirm well placement
+        - ESC: finish drawing
+
+    Returns:
+        wells: list of (x, y, radius)
+    """
+    wells = []
+    radius = initial_radius
+    cursor = (0, 0)
+    preview_frame = frame.copy()
+
+    # Mouse callback updates cursor position
+    def mouse_callback(event, x, y, flags, param):
+        nonlocal cursor
+        cursor = (x, y)
+        if event == cv2.EVENT_LBUTTONDOWN:
+            wells.append((x, y, radius))
+
+    cv2.namedWindow("Draw Wells")
+    cv2.setMouseCallback("Draw Wells", mouse_callback)
+
+    while True:
+        # Copy original frame
+        preview_frame[:] = frame.copy()
+
+        # Draw all confirmed wells
+        for w in wells:
+            cv2.circle(preview_frame, (w[0], w[1]), w[2], (0, 255, 0), 2)
+
+        # Draw preview well centered at cursor
+        cv2.circle(preview_frame, cursor, radius, (0, 0, 255), 1)
+
+        cv2.imshow("Draw Wells", preview_frame)
+        key = cv2.waitKey(20) & 0xFF
+
+        if key == 27:  # ESC to finish
+            break
+        elif key == ord("+") or key == ord("="):  # increase radius
+            radius += 1
+        elif key == ord("-") and radius > 1:  # decrease radius
+            radius -= 1
+
+    cv2.destroyWindow("Draw Wells")
+    return wells
