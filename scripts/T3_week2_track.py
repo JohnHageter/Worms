@@ -23,10 +23,10 @@ from Module.dataset.Dataset import expand_well_radius
 from Module.detection.Drawer import ROIDrawer
 
 # ---------------- CONFIG ----------------
-input_dir = Path("D:/Sachi/T3/week_2/")
-output_h5 = Path("D:/Sachi/T3/output_tracks_week_2.h5")
+input_dir = Path("/scratch/jwhageter/Worm_Tracking/Sachi/T3/week_2/")
+output_h5 = Path("/scratch/jwhageter/Worm_Tracking/Sachi/T3/output_tracks_week_2.h5")
 output_video_path = Path(
-    "D:/Sachi/T3/annotated_week_2.mp4"
+    "/scratch/jwhageter/Worm_Tracking/Sachi/T3/annotated_week_2.mp4"
 )
 
 save_every = 5
@@ -40,7 +40,7 @@ video0 = open_dataset(str(video_paths[0]))
 background = sample_background(video0, n_frames=200).astype(np.uint8)
 
 _, frame = video0.read()
-wells = ROIDrawer.load("wells2.npy")
+wells = ROIDrawer.load("/scratch/jwhageter/Worm_Tracking/worms/wells2.npy")
 # wells = expand_well_radius(wells, 1.1)
 
 H, W = frame.shape[:2]
