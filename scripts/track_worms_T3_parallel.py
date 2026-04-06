@@ -23,8 +23,8 @@ from Module.detection.Drawer import ROIDrawer
 
 # ---------------- CONFIG ----------------
 input_dirs = [
-    Path("/scratch/jwhageter/Worm_Tracking/week_1/"),
-    Path("/scratch/jwhageter/Worm_Tracking/week_2/"),
+    Path("/scratch/jwhageter/Worm_Tracking/Sachi/T3/week_1/"),
+    Path("/scratch/jwhageter/Worm_Tracking/Sachi/T3/week_2/"),
 ]
 output_h5 = [
     Path("/scratch/jwhageter/Worm_Tracking/output_tracks_week_1.h5"),
@@ -156,7 +156,7 @@ for folder_idx, input_dir in enumerate(input_dirs):
                 (visual.shape[1] // 2, visual.shape[0] // 2),
                 interpolation=cv2.INTER_AREA,
             )
-            #cv2.imshow("Tracking", display)
+            # cv2.imshow("Tracking", display)
             if global_frame_idx % save_every == 0:
                 out.write(display)
 
