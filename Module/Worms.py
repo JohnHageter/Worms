@@ -1,171 +1,166 @@
 import numpy as np
-
+import string
 
 class WormDetection:
-    def __init__(
-        self,
-        centroid,
-        curve_centroid=None,
-        end1=None,
-        end2=None,
-        area=0,
-        mask=None,
-        bbox=None,
-        curve_length=0,
-        well_id=None,
-    ):
+    def __init__(self, centroid, end1=None, end2=None, area=0, well_id=None):
         self.centroid = np.array(centroid, dtype=float)
-        self.curve_centroid = (
-            np.array(curve_centroid, dtype=float)
-            if curve_centroid is not None
-            else None
-        )
         self.end1 = np.array(end1, dtype=float) if end1 is not None else None
         self.end2 = np.array(end2, dtype=float) if end2 is not None else None
         self.area = area
-        self.mask = mask
-        self.bbox = bbox
-        self.curve_length = curve_length
         self.well_id = well_id
-
 
 class WormTrack:
-    def __init__(self, worm_id, well_id, centroid=None):
-        self.id = worm_id
+    def __init__(self, track_id, well_id, centroid, area):
+        self.id = track_id
         self.well_id = well_id
-        self.centroid = (
-            np.array([np.nan, np.nan], dtype=float)
-            if centroid is None
-            else np.array(centroid, dtype=float)
-        )
+        self.centroid = np.array(centroid, dtype=float)
+        self.prev_centroid = None
+        self.area = area
+        self.velocity = np.array([0.0,0.0])
         self.head = None
         self.tail = None
-        self._last_centroid = None
-        self.velocity = np.array([0.0, 0.0], dtype=float)
         self.missed = 0
+        self.head_tail_confident = False  # new flag
 
-    def update(self, centroid, skeleton=None):
-        """Update track with new detection and stabilize head/tail."""
-        if centroid is not None:
-            centroid = np.array(centroid, dtype=float)
-
-            # Update velocity
-            if self._last_centroid is not None:
-                self.velocity = centroid - self._last_centroid
-            else:
-                self.velocity = np.array([0.0, 0.0])
-
-            self.centroid = centroid
-            self._last_centroid = centroid
-
-            # --- Head/tail assignment ---
-            if skeleton is not None:
-                # Clean skeleton points (skip None)
-                skeleton_pts = np.array([pt for pt in skeleton if pt is not None], dtype=float)
-                if skeleton_pts.size > 0:
-                    if self.head is None or self.tail is None:
-                        # First frame: assign using farthest from previous centroid
-                        diffs = skeleton_pts - (centroid - self.velocity)
-                        dists = np.linalg.norm(diffs, axis=1)
-                        self.head = tuple(skeleton_pts[np.argmax(dists)])
-                        self.tail = tuple(skeleton_pts[np.argmin(dists)])
-                    else:
-                        # Assign new endpoints based on previous head/tail
-                        d_head = np.linalg.norm(skeleton_pts - self.head, axis=1)
-                        d_tail = np.linalg.norm(skeleton_pts - self.tail, axis=1)
-                        new_head = skeleton_pts[np.argmin(d_head)]
-                        new_tail = skeleton_pts[np.argmin(d_tail)]
-
-                        # Optional: enforce minimum separation to avoid flip
-                        if np.linalg.norm(new_head - new_tail) > 1e-3:
-                            self.head = tuple(new_head)
-                            self.tail = tuple(new_tail)
-
-                        # If worm is moving, bias head toward motion direction
-                        if np.linalg.norm(self.velocity) > 1.0:
-                            motion_point = centroid + self.velocity
-                            d_motion = np.linalg.norm(skeleton_pts - motion_point, axis=1)
-                            motion_head = skeleton_pts[np.argmin(d_motion)]
-                            # Keep previous head if distance is small, otherwise update
-                            if np.linalg.norm(np.array(self.head) - motion_head) > 1.0:
-                                self.head = tuple(motion_head)
-                                # Assign tail as opposite endpoint
-                                other_idx = np.argmin(np.linalg.norm(skeleton_pts - motion_head, axis=1))
-                                self.tail = tuple(skeleton_pts[other_idx])
-
-            self.missed = 0
+    def update_motion(self, new_centroid):
+        if self.prev_centroid is not None:
+            self.velocity = new_centroid - self.prev_centroid
         else:
-            self.mark_missed()
+            self.velocity = np.array([0.0,0.0])
+        self.prev_centroid = new_centroid
+        self.centroid = new_centroid
 
+    def compute_head_tail(self, detection):
+        if detection.end1 is None or detection.end2 is None:
+            self.head_tail_confident = False
+            self.head = None
+            self.tail = None
+            return
+
+        pts = np.array([detection.end1, detection.end2])
+
+        # ---- if previous assignment exists ----
+        if self.head_tail_confident and self.head is not None and self.tail is not None:
+            # assign based on minimum distance to previous head/tail independently
+            head_idx = np.argmin(np.linalg.norm(pts - self.head, axis=1))
+            tail_idx = np.argmin(np.linalg.norm(pts - self.tail, axis=1))
+
+            # ensure head and tail are not the same point
+            if head_idx == tail_idx:
+                tail_idx = 1 - head_idx
+
+            proposed_head, proposed_tail = pts[head_idx], pts[tail_idx]
+
+            # ---- velocity override ----
+            if np.linalg.norm(self.velocity) >= 2.0:
+                motion_point = self.centroid + self.velocity
+                motion_head_idx = np.argmin(np.linalg.norm(pts - motion_point, axis=1))
+                motion_tail_idx = 1 - motion_head_idx
+                proposed_head, proposed_tail = pts[motion_head_idx], pts[motion_tail_idx]
+
+            self.head = tuple(proposed_head)
+            self.tail = tuple(proposed_tail)
+            return
+
+        # ---- strict assignment for first confident detection ----
+        if np.linalg.norm(self.velocity) < 2.0:
+            self.head_tail_confident = False
+            return
+
+        motion_point = self.centroid + self.velocity
+        dists = np.linalg.norm(pts - motion_point, axis=1)
+        if abs(dists[0] - dists[1]) < 2.0:
+            self.head_tail_confident = False
+            return
+
+        head_idx = np.argmin(dists)
+        tail_idx = 1 - head_idx
+        self.head = tuple(pts[head_idx])
+        self.tail = tuple(pts[tail_idx])
+        self.head_tail_confident = True
+
+    def assign(self, detection):
+        self.update_motion(detection.centroid)
+        self.area = detection.area
+        self.missed = 0
+        self.compute_head_tail(detection)
 
     def mark_missed(self):
-        """Called when the worm is not detected in the current frame."""
-        self.centroid = np.array([np.nan, np.nan], dtype=float)
-        self.head = None
-        self.tail = None
-        self.velocity = np.array([0.0, 0.0], dtype=float)
+        self.centroid = np.array([np.nan, np.nan])
+        self.velocity = np.array([0.0,0.0])
         self.missed += 1
+        # If lost, clear confidence
+        if self.missed > 0:
+            self.head_tail_confident = False
+            self.head = None
+            self.tail = None
 
-    def is_lost(self, max_missed):
-        """Check if the worm should be removed."""
-        return self.missed > max_missed
-
-
-class WormTracker:
-    def __init__(self, max_dist=50, max_missed=5):
+class WellTracker:
+    def __init__(self, well_id, max_dist=50, max_missed=5):
+        self.well_id = well_id
+        self.label = string.ascii_uppercase[well_id]
         self.tracks = []
         self.next_id = 1
         self.max_dist = max_dist
         self.max_missed = max_missed
 
-    def update(self, detected_worms):
-        """
-        Update all tracks with new detections.
-        detected_worms: list of WormDetection objects
-        Returns: list of WormTrack objects
-        """
-        matched_detections = set()
+    def _make_id(self):
+        tid = f"{self.label}{self.next_id}"
+        self.next_id += 1
+        return tid
 
-        # --- Update existing tracks ---
+    def _cost(self, track, detection):
+        if track.prev_centroid is None:
+            return 0
+        dist = np.linalg.norm(track.prev_centroid - detection.centroid)
+        pred = track.prev_centroid + track.velocity
+        vel_error = np.linalg.norm(pred - detection.centroid)
+        area_ratio = abs(track.area - detection.area)/max(track.area,1)
+        return dist + vel_error + 50*area_ratio
+
+    def update(self, detections):
+        matched = set()
         for track in self.tracks:
-            # Only consider detections in the same well
-            candidates = [
-                w
-                for w in detected_worms
-                if w.well_id == track.well_id and id(w) not in matched_detections
-            ]
-
-            best_match = None
-            best_dist = self.max_dist + 1
-
-            for w in candidates:
-                last_centroid = (
-                    track._last_centroid
-                    if track._last_centroid is not None
-                    else w.centroid
-                )
-                dist = np.linalg.norm(last_centroid - w.centroid)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_match = w
-
-            if best_match is not None:
-                track.update(
-                    best_match.centroid, skeleton=[best_match.end1, best_match.end2]
-                )
-                matched_detections.add(id(best_match))
+            best = None
+            best_cost = self.max_dist
+            for det in detections:
+                if id(det) in matched:
+                    continue
+                cost = self._cost(track, det)
+                if cost < best_cost:
+                    best_cost = cost
+                    best = det
+            if best is not None:
+                track.assign(best)
+                matched.add(id(best))
             else:
                 track.mark_missed()
-
-        # --- Create new tracks for unmatched detections ---
-        for w in detected_worms:
-            if id(w) not in matched_detections:
-                new_track = WormTrack(self.next_id, w.well_id, centroid=w.centroid)
-                new_track.update(w.centroid, skeleton=[w.end1, w.end2])
-                self.tracks.append(new_track)
-                self.next_id += 1
-
-        # --- Remove lost tracks ---
-        self.tracks = [t for t in self.tracks if not t.is_lost(self.max_missed)]
-
+        for det in detections:
+            if id(det) not in matched:
+                t = WormTrack(self._make_id(), self.well_id, det.centroid, det.area)
+                t.assign(det)
+                self.tracks.append(t)
+        self.tracks = [t for t in self.tracks if t.missed <= self.max_missed]
         return self.tracks
+
+class WormTracker:
+    def __init__(self, max_dist=50, max_missed=5):
+        self.well_trackers = {}
+        self.max_dist = max_dist
+        self.max_missed = max_missed
+
+    def update(self, detections):
+        wells = {}
+        for d in detections:
+            wells.setdefault(d.well_id, []).append(d)
+        all_tracks = []
+        for well_id, dets in wells.items():
+            if well_id not in self.well_trackers:
+                self.well_trackers[well_id] = WellTracker(well_id, self.max_dist, self.max_missed)
+            tracks = self.well_trackers[well_id].update(dets)
+            all_tracks.extend(tracks)
+        for well_id, wt in self.well_trackers.items():
+            if well_id not in wells:
+                for t in wt.tracks:
+                    t.mark_missed()
+        return all_tracks

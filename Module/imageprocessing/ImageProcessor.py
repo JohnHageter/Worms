@@ -1,107 +1,144 @@
 import numpy as np
-from Module.dataset.video import load_frame
 import cv2
 from skimage.morphology import skeletonize
 from collections import defaultdict, deque
 from Module.Worms import WormDetection
 
+def mask_to_well(binary, well):
+    mask = np.zeros_like(binary, dtype=np.uint8)
+    x, y, r = map(int, well)
+    cv2.circle(mask, (x, y), r, 255, -1)
+    return cv2.bitwise_and(binary, mask)
 
-def blob_metrics(binary):
-    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+def build_worms_single_well(labels, stats, centroids, well_id, minimum_area=10):
+    worms = []
+    for label in range(1, stats.shape[0]):
+        x, y, w, h, area = stats[label]
+        cx, cy = centroids[label]
 
-    metrics = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 10:
+        if area < minimum_area:
             continue
 
-        length = None
-        thickness = None
+        mask = (labels[y:y+h, x:x+w] == label).astype(np.uint8) * 255
 
-        if len(cnt) >= 5:
-            (_, _), (MA, ma), _ = cv2.fitEllipse(cnt)
-            length = max(MA, ma)
-            thickness = min(MA, ma)
+        # Always assign centroid
+        curve_centroid, end1, end2, path_length = extract_curve(mask, (x, y, w, h), area)
 
-        metrics.append(
-            {"contour": cnt, "area": area, "length": length, "thickness": thickness}
-        )
+        worms.append(WormDetection(
+            centroid=(cx, cy),
+            end1=end1,   # may be None
+            end2=end2,   # may be None
+            area=area,
+            well_id=well_id
+        ))
+    return worms
 
-    return metrics
-
+def filter_worms(worms, min_area=10, max_area=500):
+    return [w for w in worms if min_area <= w.area <= max_area]
 
 def find_components(binary):
     return cv2.connectedComponentsWithStats(binary, connectivity=8)
 
 
-def centroid_in_any_well(cx, cy, wells):
-    for well in wells:
-        if centroid_within_well(cx, cy, well):
-            return True
-    return False
-
-
-def centroid_within_well(x, y, well):
-    wx, wy, r = well
-    return (x - wx) ** 2 + (y - wy) ** 2 <= r**2
-
 
 def extract_curve(mask, bbox, area, min_area=50):
-    if area <= min_area:
+    """
+    Extract skeleton curve endpoints and centroid from a worm mask.
+
+    Parameters
+    ----------
+    mask : 2D np.ndarray
+        Binary mask of a worm (1s for worm pixels)
+    bbox : tuple
+        Bounding box (x, y, w, h) of the mask in the original frame
+    area : int
+        Area of the blob
+    min_area : int
+        Minimum area to consider
+
+    Returns
+    -------
+    curve_centroid : tuple
+        Centroid of skeleton path (x, y)
+    end1 : tuple
+        Endpoint 1 of skeleton (x, y)
+    end2 : tuple
+        Endpoint 2 of skeleton (x, y)
+    path_length : int
+        Number of pixels in the skeleton path
+    """
+    if area < min_area:
         return None, None, None, 0
 
     skel = skeletonize(mask.astype(bool)).astype(np.uint8)
     path = longest_skeleton_path(skel)
-
-    if len(path) < 2:
-        return None, None, None, 0
+    
+    if len(path) < 5:  # too short to assign head/tail
+        return None, None, None, len(path)
 
     path = np.array(path)
-    x, y, _, _ = bbox
-
-    curve_centroid = path.mean(axis=0)
-    end1 = path[0]
-    end2 = path[-1]
-
-    curve_centroid = (curve_centroid[0] + x, curve_centroid[1] + y)
-    end1 = (end1[0] + x, end1[1] + y)
-    end2 = (end2[0] + x, end2[1] + y)
+    x0, y0, _, _ = bbox
+    end1 = (path[0][0] + x0, path[0][1] + y0)
+    end2 = (path[-1][0] + x0, path[-1][1] + y0)
+    curve_centroid = (path[:,0].mean() + x0, path[:,1].mean() + y0)
 
     return curve_centroid, end1, end2, len(path)
-
-
+    
 def longest_skeleton_path(skel):
+    """
+    Find the longest connected path through a skeletonized binary image.
+    Handles broken skeletons and small gaps robustly.
+    
+    Parameters
+    ----------
+    skel : 2D np.ndarray (binary)
+        Skeletonized worm mask (1-pixel wide line)
+    
+    Returns
+    -------
+    path : list of (x, y)
+        Coordinates along the longest skeleton path
+    """
     ys, xs = np.where(skel > 0)
     if len(xs) < 2:
         return []
 
-    points = list(zip(xs, ys))
+    points = set(zip(xs, ys))
     graph = defaultdict(list)
-
-    neighbors = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+    neighbors = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
 
     for x, y in points:
         for dx, dy in neighbors:
             nx, ny = x + dx, y + dy
-            if (nx, ny) in set(points):
+            if (nx, ny) in points:
                 graph[(x, y)].append((nx, ny))
 
     endpoints = [p for p in graph if len(graph[p]) == 1]
     if not endpoints:
-        return []
+        endpoints = list(points)  # fallback if skeleton looped
 
-    def bfs(start):
+    def bfs_longest(start):
         prev = {start: None}
         q = deque([start])
+        visited = set([start])
         while q:
             u = q.popleft()
             for v in graph[u]:
-                if v not in prev:
+                if v not in visited:
                     prev[v] = u
+                    visited.add(v)
                     q.append(v)
-        end = max(prev, key=lambda p: (p[0] - start[0]) ** 2 + (p[1] - start[1]) ** 2)
+        max_dist = -1
+        farthest = start
+        for p in prev:
+            dx = p[0] - start[0]
+            dy = p[1] - start[1]
+            d = dx*dx + dy*dy
+            if d > max_dist:
+                max_dist = d
+                farthest = p
         path = []
-        cur = end
+        cur = farthest
         while cur is not None:
             path.append(cur)
             cur = prev[cur]
@@ -109,65 +146,8 @@ def longest_skeleton_path(skel):
 
     longest = []
     for ep in endpoints:
-        p = bfs(ep)
-        if len(p) > len(longest):
-            longest = p
+        path = bfs_longest(ep)
+        if len(path) > len(longest):
+            longest = path
 
     return longest
-
-
-def build_worms(labels, stats, centroids, wells, minimum_skeleton_area=10):
-    worms = []
-
-    for label in range(1, stats.shape[0]):
-        x, y, w, h, area = stats[label]
-        cx, cy = centroids[label]
-
-        well_id = None
-        for i, well in enumerate(wells):
-            if centroid_within_well(cx, cy, well):
-                well_id = i
-                break
-
-        if well_id is None:
-            continue
-
-        mask = (labels[y : y + h, x : x + w] == label).astype(np.uint8) * 255
-
-        curve_centroid, end1, end2, curve_length = extract_curve(
-            mask, (x, y, w, h), area, min_area=minimum_skeleton_area
-        )
-
-        worms.append(
-            WormDetection(
-                centroid=(cx, cy),
-                curve_centroid=curve_centroid,
-                end1=end1,
-                end2=end2,
-                area=area,
-                mask=mask,
-                bbox=(x, y, w, h),
-                curve_length=curve_length,
-                well_id=well_id,
-            )
-        )
-
-    return worms
-
-
-def filter_worms(worms, min_area=10, max_area=500, min_thickness=1):
-    kept = []
-
-    for worm in worms:
-        # Access attributes via dot notation
-        area = worm.area
-        if area < min_area or area > max_area:
-            continue
-
-        dist_map = cv2.distanceTransform(worm.mask, cv2.DIST_L2, 5)
-        if dist_map.max() < min_thickness:
-            continue
-
-        kept.append(worm)
-
-    return kept
