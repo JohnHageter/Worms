@@ -40,7 +40,7 @@ video0 = open_dataset(str(video_paths[0]))
 background = sample_background(video0, n_frames=200).astype(np.uint8)
 
 _, frame = video0.read()
-wells = ROIDrawer.load("wells.npy")
+wells = ROIDrawer.load("/scratch/jwhageter/Worm_Tracking/worms/wells2.npy")
 # wells = expand_well_radius(wells, 1.1)
 
 H, W = frame.shape[:2]
