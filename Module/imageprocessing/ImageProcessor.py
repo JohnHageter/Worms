@@ -40,7 +40,6 @@ def find_components(binary):
     return cv2.connectedComponentsWithStats(binary, connectivity=8)
 
 
-
 def extract_curve(mask, bbox, area, min_area=50):
     """
     Extract skeleton curve endpoints and centroid from a worm mask.
@@ -83,7 +82,7 @@ def extract_curve(mask, bbox, area, min_area=50):
     curve_centroid = (path[:,0].mean() + x0, path[:,1].mean() + y0)
 
     return curve_centroid, end1, end2, len(path)
-    
+
 def longest_skeleton_path(skel):
     """
     Find the longest connected path through a skeletonized binary image.
@@ -151,3 +150,74 @@ def longest_skeleton_path(skel):
             longest = path
 
     return longest
+
+
+def merge_close_blobs(labels, stats, centroids, max_merge_dist=5, max_small_area=50):
+    """
+    Merge small blobs that are close to each other into a single blob.
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        Labeled mask from cv2.connectedComponentsWithStats
+    stats : np.ndarray
+        Blob statistics from cv2.connectedComponentsWithStats
+    centroids : np.ndarray
+        Blob centroids from cv2.connectedComponentsWithStats
+    max_merge_dist : int
+        Maximum distance (pixels) to merge small blobs
+    max_small_area : int
+        Only blobs smaller than this are considered for merging
+
+    Returns
+    -------
+    labels_new : np.ndarray
+        Updated label mask with small close blobs merged
+    stats_new : np.ndarray
+        Updated stats
+    centroids_new : np.ndarray
+        Updated centroids
+    """
+    labels_new = labels.copy()
+    n_labels = stats.shape[0]
+
+    merged_map = {}  # mapping from small blob -> target large blob
+
+    for i in range(1, n_labels):
+        area_i = stats[i, cv2.CC_STAT_AREA]
+        if area_i > max_small_area:
+            continue  # only merge small blobs
+        ci = centroids[i]
+
+        # find candidate blobs to merge with
+        candidates = []
+        for j in range(1, n_labels):
+            if i == j:
+                continue
+            area_j = stats[j, cv2.CC_STAT_AREA]
+            if area_j < max_small_area:
+                continue  # don't merge small->small
+            cj = centroids[j]
+            dist = np.linalg.norm(ci - cj)
+            if dist <= max_merge_dist:
+                candidates.append(j)
+
+        if candidates:
+            # merge into the closest large blob
+            target = candidates[
+                np.argmin([np.linalg.norm(ci - centroids[c]) for c in candidates])
+            ]
+            merged_map[i] = target
+
+    # apply merging
+    for small_idx, target_idx in merged_map.items():
+        labels_new[labels == small_idx] = target_idx
+
+    # recompute stats and centroids
+    n_labels_new, labels_new, stats_new, centroids_new = (
+        cv2.connectedComponentsWithStats(
+            (labels_new > 0).astype(np.uint8), connectivity=8
+        )
+    )
+
+    return labels_new, stats_new, centroids_new
