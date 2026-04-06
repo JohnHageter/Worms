@@ -1,6 +1,7 @@
 import numpy as np
 import string
 
+
 class WormDetection:
     def __init__(self, centroid, end1=None, end2=None, area=0, well_id=None):
         self.centroid = np.array(centroid, dtype=float)
@@ -38,29 +39,29 @@ class WormTrack:
         self.prev_centroid = self.centroid.copy()
         self.centroid = new_centroid
 
-    def compute_head_tail(self, detection):
-        if (
-            detection.end1 is None or detection.end2 is None or self.area < 150
-        ):  # area threshold
+    def compute_head_tail(self, detection, min_area=150, min_motion=2.0):
+        """Assign head/tail only if area and motion are sufficient"""
+        if detection.end1 is None or detection.end2 is None:
             self.head_tail_confident = False
             self.head = None
             self.tail = None
             return
 
-            # --- movement check ---
-        if np.linalg.norm(self.velocity) < 2.0:  # adjust threshold as needed
+        if self.area < min_area or np.linalg.norm(self.velocity) < min_motion:
+            # Not confident enough to assign head/tail
             self.head_tail_confident = False
+            self.head = None
+            self.tail = None
             return
 
         pts = np.array([detection.end1, detection.end2])
 
-        # ---- previous assignment exists ----
         if self.head_tail_confident and self.head is not None and self.tail is not None:
+            # Keep continuity with previous head/tail
             head_idx = np.argmin(np.linalg.norm(pts - self.head, axis=1))
             tail_idx = np.argmin(np.linalg.norm(pts - self.tail, axis=1))
             if head_idx == tail_idx:
                 tail_idx = 1 - head_idx
-
             proposed_head, proposed_tail = pts[head_idx], pts[tail_idx]
 
             # velocity override
@@ -68,17 +69,20 @@ class WormTrack:
                 motion_point = self.centroid + self.velocity
                 motion_head_idx = np.argmin(np.linalg.norm(pts - motion_point, axis=1))
                 motion_tail_idx = 1 - motion_head_idx
-                proposed_head, proposed_tail = pts[motion_head_idx], pts[motion_tail_idx]
+                proposed_head, proposed_tail = (
+                    pts[motion_head_idx],
+                    pts[motion_tail_idx],
+                )
 
-            # store previous positions before updating
-            self.prev_head = self.head.copy() if self.head is not None else None
-            self.prev_tail = self.tail.copy() if self.tail is not None else None
+            # store previous positions
+            self.prev_head = self.head.copy()
+            self.prev_tail = self.tail.copy()
 
             self.head = proposed_head
             self.tail = proposed_tail
             return
 
-        # ---- first confident detection ----
+        # First confident assignment
         motion_point = self.centroid + self.velocity
         dists = np.linalg.norm(pts - motion_point, axis=1)
         if abs(dists[0] - dists[1]) < 3.0:
@@ -88,7 +92,6 @@ class WormTrack:
         head_idx = np.argmin(dists)
         tail_idx = 1 - head_idx
 
-        # store previous positions before updating
         self.prev_head = self.head.copy() if self.head is not None else None
         self.prev_tail = self.tail.copy() if self.tail is not None else None
 
@@ -103,10 +106,8 @@ class WormTrack:
         self.compute_head_tail(detection)
 
     def mark_missed(self):
-        self.centroid = np.array([np.nan, np.nan])
-        self.velocity = np.array([0.0,0.0])
         self.missed += 1
-        # If lost, clear confidence
+        self.velocity = np.array([0.0, 0.0])
         if self.missed > 0:
             self.head_tail_confident = False
             self.head = None
@@ -114,14 +115,18 @@ class WormTrack:
 
 
 class WellTracker:
-    def __init__(self, well_id, max_dist=50, max_missed=5, min_new_dist=50):
+    def __init__(
+        self, well_id, max_dist=50, max_missed=5, min_new_area=5, area_weight=50
+    ):
         self.well_id = well_id
         self.label = string.ascii_uppercase[well_id]
         self.tracks = []
+        self.lost_tracks = []
         self.next_id = 1
         self.max_dist = max_dist
         self.max_missed = max_missed
-        self.min_new_dist = min_new_dist  # minimum distance to create new ID
+        self.min_new_area = min_new_area
+        self.area_weight = area_weight
 
     def _make_id(self):
         tid = f"{self.label}{self.next_id}"
@@ -129,26 +134,30 @@ class WellTracker:
         return tid
 
     def _cost(self, track, detection):
+        """Distance + predicted motion + area similarity"""
         if track.prev_centroid is None:
             return 0
         dist = np.linalg.norm(track.prev_centroid - detection.centroid)
         pred = track.prev_centroid + track.velocity
         vel_error = np.linalg.norm(pred - detection.centroid)
         area_ratio = abs(track.area - detection.area) / max(track.area, 1)
-        return dist + vel_error + 50 * area_ratio
+        return dist + vel_error + self.area_weight * area_ratio
 
     def _can_create_new(self, detection):
-        """Check if new ID can be created based on distance to existing tracks"""
-        for t in self.tracks:
-            if (
-                t.missed == 0
-                and np.linalg.norm(t.centroid - detection.centroid) < self.min_new_dist
-            ):
-                return False
+        """Only create new track if area is large enough and far from existing tracks"""
+        if detection.area < self.min_new_area:
+            return False
+        for t in self.tracks + self.lost_tracks:
+            if t.centroid is not None and not np.isnan(t.centroid[0]):
+                if np.linalg.norm(t.centroid - detection.centroid) < self.max_dist:
+                    return False
         return True
 
     def update(self, detections):
         matched = set()
+        active_tracks = []
+
+        # 1. Try to match existing active tracks
         for track in self.tracks:
             best = None
             best_cost = self.max_dist
@@ -162,18 +171,44 @@ class WellTracker:
             if best is not None:
                 track.assign(best)
                 matched.add(id(best))
+                active_tracks.append(track)
             else:
                 track.mark_missed()
+                if track.missed <= self.max_missed:
+                    self.lost_tracks.append(track)
 
-        # create new tracks only if far from existing tracks
+        # 2. Try to rematch lost tracks
+        still_lost = []
+        for track in self.lost_tracks:
+            best = None
+            best_dist = self.max_dist * 10  # allow rematch over bigger distance
+            for det in detections:
+                if id(det) in matched:
+                    continue
+                cost = self._cost(track, det)
+                if cost < best_dist:
+                    best = det
+                    best_dist = cost
+            if best is not None:
+                track.assign(best)
+                matched.add(id(best))
+                active_tracks.append(track)
+            else:
+                still_lost.append(track)
+        self.lost_tracks = still_lost
+
+        # 3. Create new tracks for unmatched detections (buds)
         for det in detections:
             if id(det) not in matched and self._can_create_new(det):
                 t = WormTrack(self._make_id(), self.well_id, det.centroid, det.area)
                 t.assign(det)
+                active_tracks.append(t)
                 self.tracks.append(t)
 
+        # 4. Clean up dead tracks
         self.tracks = [t for t in self.tracks if t.missed <= self.max_missed]
-        return self.tracks
+
+        return active_tracks
 
 
 class WormTracker:
@@ -189,11 +224,9 @@ class WormTracker:
         all_tracks = []
         for well_id, dets in wells.items():
             if well_id not in self.well_trackers:
-                self.well_trackers[well_id] = WellTracker(well_id, self.max_dist, self.max_missed)
+                self.well_trackers[well_id] = WellTracker(
+                    well_id, self.max_dist, self.max_missed
+                )
             tracks = self.well_trackers[well_id].update(dets)
             all_tracks.extend(tracks)
-        for well_id, wt in self.well_trackers.items():
-            if well_id not in wells:
-                for t in wt.tracks:
-                    t.mark_missed()
         return all_tracks

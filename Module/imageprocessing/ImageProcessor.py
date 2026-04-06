@@ -152,7 +152,7 @@ def longest_skeleton_path(skel):
     return longest
 
 
-def merge_close_blobs(labels, stats, centroids, max_merge_dist=5, max_small_area=50):
+def merge_close_blobs(labels, stats, centroids, max_merge_dist=50, max_small_area=50):
     """
     Merge small blobs that are close to each other into a single blob.
 

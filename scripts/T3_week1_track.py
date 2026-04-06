@@ -25,9 +25,7 @@ from Module.detection.Drawer import ROIDrawer
 # ---------------- CONFIG ----------------
 input_dir = Path("/scratch/jwhageter/Worm_Tracking/Sachi/T3/week_1/")
 output_h5 = Path("/scratch/jwhageter/Worm_Tracking/Sachi/T3/output_tracks_week_1.h5")
-output_video_path = Path(
-    "/scratch/jwhageter/Worm_Tracking/Sachi/T3/annotated_week_1.mp4"
-)
+output_video_path = Path("/scratch/jwhageter/Worm_Tracking/Sachi/T3/annotated_week_1.mp4")
 
 save_every = 5
 fps = 2
@@ -40,7 +38,7 @@ video0 = open_dataset(str(video_paths[0]))
 background = sample_background(video0, n_frames=200).astype(np.uint8)
 
 _, frame = video0.read()
-wells = ROIDrawer.load("/scratch/jwhageter/Worm_Tracking/worms/wells.npy")
+wells = ROIDrawer.load("/scratch/jwhageter/Worm_Tracking/wells.npy")
 # wells = expand_well_radius(wells, 1.1)
 
 H, W = frame.shape[:2]
@@ -71,18 +69,20 @@ video_count = 1
 
 # ---------------- PROCESS ----------------
 for video_path in video_paths:
+
     print(f"Processing: {video_path.name}")
     video = open_dataset(str(video_path))
 
     while True:
         ret, img = video.read()
+
         if not ret:
             break
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
 
         # ---- foreground ----
-        _, thresh = extract_foreground(gray, background, thresh_val=15)
+        _, thresh = extract_foreground(gray, background, thresh_val=13)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
 
@@ -93,9 +93,6 @@ for video_path in video_paths:
             thresh_well = mask_to_well(thresh, well)
 
             _, labels, stats, centroids = find_components(thresh_well)
-            # labels, stats, centroids = merge_close_blobs(
-            #     labels, stats, centroids, max_merge_dist=20, max_small_area=100
-            # )
 
             worms = build_worms_single_well(
                 labels, stats, centroids, well_id, minimum_area=10
@@ -252,6 +249,7 @@ for video_path in video_paths:
         track_ds[-len(frame_data) :] = frame_data
 
         global_frame_idx += 1
+
         # if cv2.waitKey(1) & 0xFF == 27:
         #     break
 
