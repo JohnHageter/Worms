@@ -16,3 +16,20 @@ This software comes in two pieces:
 1. ...
 2.
 3.
+
+
+dataset output structure
+well_i.h5
+├── /main
+│   ├── centroid_x [T]
+│   ├── centroid_y [T]
+│   ├── head_x     [T]
+│   ├── head_y     [T]
+│   ├── tail_x     [T]
+│   ├── tail_y     [T]
+│   └── region     [T]
+└── /fission
+    ├── track_id   [N x T]
+    ├── centroid_x [N x T]
+    ├── centroid_y [N x T]
+    └── region     [N x T]

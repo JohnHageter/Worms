@@ -5,6 +5,16 @@ from pathlib import Path
 from tqdm import tqdm
 from Module.utils import create_writer
 
+
+def count_total_frames(video_paths, frame_step=0):
+    total = 0
+    for vp in video_paths:
+        v = open_dataset(str(vp))
+        total += int(v.get(cv2.CAP_PROP_FRAME_COUNT))
+        v.release()
+    return total // frame_step
+
+
 def open_dataset(video_path) -> cv2.VideoCapture:
     if not Path(video_path).exists():
         raise ValueError(f"Video file {video_path} does not exist.")

@@ -2,7 +2,6 @@ import numpy as np
 import cv2
 from skimage.morphology import skeletonize
 from collections import defaultdict, deque
-from Module.Worms import WormDetection
 
 def mask_to_well(binary, well):
     mask = np.zeros_like(binary, dtype=np.uint8)
@@ -10,28 +9,6 @@ def mask_to_well(binary, well):
     cv2.circle(mask, (x, y), r, 255, -1)
     return cv2.bitwise_and(binary, mask)
 
-def build_worms_single_well(labels, stats, centroids, well_id, minimum_area=10):
-    worms = []
-    for label in range(1, stats.shape[0]):
-        x, y, w, h, area = stats[label]
-        cx, cy = centroids[label]
-
-        if area < minimum_area:
-            continue
-
-        mask = (labels[y:y+h, x:x+w] == label).astype(np.uint8) * 255
-
-        # Always assign centroid
-        curve_centroid, end1, end2, path_length = extract_curve(mask, (x, y, w, h), area)
-
-        worms.append(WormDetection(
-            centroid=(cx, cy),
-            end1=end1,   # may be None
-            end2=end2,   # may be None
-            area=area,
-            well_id=well_id
-        ))
-    return worms
 
 def filter_worms(worms, min_area=10, max_area=500):
     return [w for w in worms if min_area <= w.area <= max_area]
