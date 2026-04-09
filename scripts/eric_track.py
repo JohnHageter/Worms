@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from Module.imageprocessing.foreground import extract_foreground
 from Module.Worms import WormTracker
 from Module.dataset.video import open_dataset
-from Module.detection.Drawer import ROIDrawer
+from Module.detection.Drawer import ROIDrawer, RectROIDrawer
 from Module.imageprocessing.background import sample_per_well_backgrounds
 from Module.utils import (
     annotate_detections,
@@ -21,22 +21,26 @@ from Module.utils import (
     create_region_mask,
     crop_well,
     display_frame,
+    pad_to_size,
     stitch_wells,
-    append_row
+    append_row,
 )
 
-# Global input settings
-VIDEO_DIR = Path("D:/Sachi/T3/week_1/")
-DATA_OUT_DIR = Path("D:/Sachi/T3/week_1_out_v1")
+
+VIDEO_DIR = Path("D:/Tracking_Data/Eric/")
+DATA_OUT_DIR = Path("D:/Tracking_Data/Eric/Out")
 FRAME_STEP = 1  # process every nth frame
-CAPTURE_FPS = 2
-WELLS = ROIDrawer.load("wells.npy")
+CAPTURE_FPS = 10
 
 video_paths = sorted(VIDEO_DIR.glob("*.mp4"))
 DATA_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-
-# Tracker settings
+# cap = cv2.VideoCapture(str(video_paths[0]))
+# ret, frame = cap.read()
+# drawer = ROIDrawer(frame)
+# rois = drawer.draw()
+# drawer.save("Sadie_ROIS.npy")
+WELLS = RectROIDrawer.load("Sadie_ROIS.npy")
 WELL_BACKGROUNDS = {}
 cap_bg = open_dataset(video_paths[0])
 WELL_BACKGROUNDS = sample_per_well_backgrounds(
@@ -46,21 +50,19 @@ WELL_BACKGROUNDS = sample_per_well_backgrounds(
 )
 cap_bg.release()
 
-
 N_WORKERS = min(8, len(WELLS))
 tracker_params = dict(
     max_dist=int(500),
     max_missed=1000,
-    min_new_area=int(30),
+    min_new_area=int(10),
     min_new_dist=int(50),
     area_weight=50,
-    min_skel_length=int(10),
+    min_skel_length=int(50),
     min_motion=5,
-    min_area=int(10),
+    min_area=int(5),
 )
 
 TRACKERS = [WormTracker(well_id=i, **tracker_params) for i in range(len(WELLS))]
-
 
 #### Dataset creation
 WELL_H5 = {}
@@ -111,11 +113,9 @@ def track_well(frame, well_id, well):
     well_crop = crop_well(frame, well)
     h, w = well_crop.shape
     r = w // 2
-
     region_mask = create_region_mask(shape=(h, w), radius=r, wall_width=16)
 
     well_bg = WELL_BACKGROUNDS[well_id]
-
     fg, fg_mask = extract_foreground(
         well_crop,
         well_bg,
@@ -130,24 +130,22 @@ def track_well(frame, well_id, well):
     )
 
     active_tracks = TRACKERS[well_id].update(all_dets)
-
     annotated_well_image = annotate_region_boundaries(
         well_crop,
         well,
         wall_width=16,
     )
-
     annotated_well_image = annotate_detections(
         annotated_well_image,
         all_dets,
     )
-
     annotated_well_image = annotate_tracks(
         annotated_well_image,
         active_tracks,
     )
 
     return well_crop, annotated_well_image, all_dets
+
 
 try:
     with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
@@ -199,19 +197,26 @@ try:
                         row = [
                             video_idx,
                             frame_idx,
-                            -1,        # track_id
+                            -1,  # track_id
                             well_id,
-                            -1, -1,    # cx, cy
-                            -1, -1,    # hx, hy
-                            -1, -1,    # tx, ty
-                            -1,        # region
-                            -1,        # age
-                            1,         # is_primary (always 1)
+                            -1,
+                            -1,  # cx, cy
+                            -1,
+                            -1,  # hx, hy
+                            -1,
+                            -1,  # tx, ty
+                            -1,  # region
+                            -1,  # age
+                            1,  # is_primary (always 1)
                         ]
                     else:
                         cx, cy = map(int, primary.centroid)
-                        hx, hy = (-1, -1) if primary.head is None else map(int, primary.head)
-                        tx, ty = (-1, -1) if primary.tail is None else map(int, primary.tail)
+                        hx, hy = (
+                            (-1, -1) if primary.head is None else map(int, primary.head)
+                        )
+                        tx, ty = (
+                            (-1, -1) if primary.tail is None else map(int, primary.tail)
+                        )
 
                         region = 1 if primary.region == "core" else 2
                         track_num = int(primary.id[1:])  # strip letter
@@ -221,12 +226,15 @@ try:
                             frame_idx,
                             track_num,
                             well_id,
-                            cx, cy,
-                            hx, hy,
-                            tx, ty,
+                            cx,
+                            cy,
+                            hx,
+                            hy,
+                            tx,
+                            ty,
                             region,
                             primary.age,
-                            1,          # is_primary
+                            1,  # is_primary
                         ]
 
                     append_row(main_ds, row)
@@ -251,7 +259,8 @@ try:
                             frame_idx,
                             track_num,
                             well_id,
-                            cx, cy,
+                            cx,
+                            cy,
                             int(t.area),
                             region,
                             t.age,
@@ -261,22 +270,43 @@ try:
 
                 total_dets = sum(len(dets) for dets in all_dets)
 
-                crop_h, crop_w = well_crops[0].shape
-                stitched = stitch_wells(annotated_well_images, (crop_h, crop_w))
+                # --------------------------------------------------
+                # Normalize ROI sizes BEFORE stitching
+                # --------------------------------------------------
+                heights = [img.shape[0] for img in annotated_well_images]
+                widths = [img.shape[1] for img in annotated_well_images]
+
+                crop_h = max(heights)
+                crop_w = max(widths)
+                padded_well_images = [
+                    pad_to_size(img, crop_h, crop_w) for img in annotated_well_images
+                ]
+
+                # --------------------------------------------------
+                # Stitch wells (UNCHANGED LOGIC)
+                # --------------------------------------------------
+                stitched = stitch_wells(padded_well_images, (crop_h, crop_w))
                 stitched = annotate_frame_metadata(
                     stitched, frame_idx, video_idx, total_dets, CAPTURE_FPS
                 )
-
+                
+                stitched_highres = cv2.resize(
+                    stitched,
+                    None,
+                    fx=4,
+                    fy=4,
+                    interpolation=cv2.INTER_LINEAR
+                )
+                
                 if out_video is None:
                     sH, sW, _ = stitched.shape
                     path = DATA_OUT_DIR / "Annotated.mp4"
-                    out_video = cv2.VideoWriter(str(path), fourcc, 30, (sW, sH))
+                    out_video = cv2.VideoWriter(str(path), fourcc, 30, (sW*4, sH*4))
 
+                if frame_idx % 1 == 0:
+                    out_video.write(stitched_highres)
 
-                if frame_idx % 100 == 0:
-                    out_video.write(stitched)
-                
-                #display_frame("All Wells", stitched)
+                display_frame("All Wells", stitched_highres)
 
                 frame_idx += 1
                 proc_frames += 1

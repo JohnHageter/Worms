@@ -93,31 +93,34 @@ def annotate_detections(frame, dets):
     return annotated
 
 
-def annotate_region_circles(
+def annotate_region_boundaries(
     well_crop,
-    radius,
+    well,
     wall_width=8,
-    color_well=(0, 255, 0),  # green
-    color_core=(255, 0, 0),  # blue (BGR)
+    color_outer=(0, 255, 0),  # green
+    color_inner=(255, 0, 0),  # blue
     thickness=2,
 ):
     """
-    Annotate a well image with region boundaries.
+    Annotate region boundaries for circular or rectangular ROIs.
 
     Parameters
     ----------
     well_crop : np.ndarray
         Cropped well image (grayscale or BGR)
-    radius : int
-        Full well radius (in pixels)
+    well : tuple
+        Either:
+            (cx, cy, r)     → circular well
+            (x, y, w, h)    → rectangular / square ROI
+        NOTE: Only geometry is used, not absolute position.
     wall_width : int
-        Width of wall band (in pixels)
-    color_well : tuple
-        BGR color for outer well boundary
-    color_core : tuple
-        BGR color for core-wall boundary
+        Thickness of wall region (pixels)
+    color_outer : tuple
+        Color of outer boundary
+    color_inner : tuple
+        Color of core-wall boundary
     thickness : int
-        Circle line thickness
+        Line thickness
 
     Returns
     -------
@@ -125,32 +128,65 @@ def annotate_region_circles(
         Annotated BGR image
     """
 
-    # Ensure BGR image for drawing
+    # Ensure BGR
     if well_crop.ndim == 2:
         annotated = cv2.cvtColor(well_crop, cv2.COLOR_GRAY2BGR)
     else:
         annotated = well_crop.copy()
 
     h, w = annotated.shape[:2]
-    cx, cy = w // 2, h // 2
 
-    # 1. Draw outer well boundary (green)
-    cv2.circle(
-        annotated,
-        (cx, cy),
-        radius,
-        color_well,
-        thickness,
-    )
+    # --------------------------------------------------
+    # Case 1: CIRCULAR WELL (cx, cy, r)
+    # --------------------------------------------------
+    if len(well) == 3:
+        _, _, r = map(int, well)
+        cx, cy = w // 2, h // 2
 
-    # 2. Draw core/wall boundary (blue)
-    cv2.circle(
-        annotated,
-        (cx, cy),
-        radius - wall_width,
-        color_core,
-        thickness,
-    )
+        # Outer boundary
+        cv2.circle(
+            annotated,
+            (cx, cy),
+            r,
+            color_outer,
+            thickness,
+        )
+
+        # Core / wall boundary
+        cv2.circle(
+            annotated,
+            (cx, cy),
+            max(r - wall_width, 1),
+            color_inner,
+            thickness,
+        )
+
+    # --------------------------------------------------
+    # Case 2: RECTANGULAR / SQUARE ROI (x, y, w, h)
+    # --------------------------------------------------
+    elif len(well) == 4:
+        # Outer rectangle
+        cv2.rectangle(
+            annotated,
+            (0, 0),
+            (w - 1, h - 1),
+            color_outer,
+            thickness,
+        )
+
+        # Inner (core) rectangle
+        cv2.rectangle(
+            annotated,
+            (wall_width, wall_width),
+            (w - wall_width - 1, h - wall_width - 1),
+            color_inner,
+            thickness,
+        )
+
+    else:
+        raise ValueError(
+            "Invalid well format. Expected (cx, cy, r) or (x, y, w, h)."
+        )
 
     return annotated
 
@@ -178,7 +214,6 @@ def annotate_tracks(
             1,
         )
 
-
         if t.head is not None:
             hx = int((t.head[0] - ox) * scale)
             hy = int((t.head[1] - oy) * scale)
@@ -188,34 +223,72 @@ def annotate_tracks(
             tx = int((t.tail[0] - ox) * scale)
             ty = int((t.tail[1] - oy) * scale)
             cv2.circle(frame, (tx, ty), 3, (0, 0, 255), -1)
-    
+
     return frame
 
 
 def stitch_wells(well_crops, crop_shape):
     """
-    well_crops: list of images or None (in ID order)
-    crop_shape: (H, W)
+    Stitch well crops into a composite image.
+
+    Parameters
+    ----------
+    well_crops : list[np.ndarray or None]
+        Each crop must be either:
+            - (H, W) grayscale
+            - (H, W, 3) BGR
+        None entries are replaced with black images.
+    crop_shape : tuple
+        (H, W) target spatial size
     """
     H, W = crop_shape
 
-    filled = [
-        crop if crop is not None else np.zeros((H, W), dtype=np.uint8)
-        for crop in well_crops
-    ]
+    filled = []
+    
+    if len(well_crops) ==1:
+        composite = well_crops[0]
+        return composite
 
-    # Pad if odd
+    for crop in well_crops:
+        # Replace None with black BGR
+        if crop is None:
+            filled.append(np.zeros((H, W, 3), dtype=np.uint8))
+            continue
+
+        # Convert grayscale → BGR
+        if crop.ndim == 2:
+            crop = cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR)
+
+        # Sanity check
+        if crop.shape[:2] != (H, W):
+            raise ValueError(f"Crop has shape {crop.shape[:2]}, expected {(H, W)}")
+
+        filled.append(crop)
+
+    # Pad to even count (2 wells per row)
     if len(filled) % 2 == 1:
-        filled.append(np.zeros((H, W), dtype=np.uint8))
+        filled.append(np.zeros((H, W, 3), dtype=np.uint8))
 
-    # Build rows (2 wells per row)
+    # Build rows
     rows = []
     for i in range(0, len(filled), 2):
-        row = np.hstack(filled[i : i + 2])
-        rows.append(row)
+        rows.append(np.hstack(filled[i : i + 2]))
 
     composite = np.vstack(rows)
     return composite
+
+
+def create_square_region_mask(shape, margin):
+    h, w = shape
+    mask = np.ones((h, w), dtype=np.uint8)
+
+    mask[:margin, :] = 2  # top wall
+    mask[-margin:, :] = 2  # bottom wall
+    mask[:, :margin] = 2  # left wall
+    mask[:, -margin:] = 2  # right wall
+
+    mask[mask != 2] = 1  # core
+    return mask
 
 
 def create_region_mask(shape, radius, wall_width=8):
@@ -271,35 +344,73 @@ def create_region_mask(shape, radius, wall_width=8):
     return region_mask
 
 
+def pad_to_size(img, target_h, target_w):
+    h, w = img.shape[:2]
+
+    pad_h = target_h - h
+    pad_w = target_w - w
+
+    if pad_h < 0 or pad_w < 0:
+        raise ValueError("Target size is smaller than image")
+
+    top = pad_h // 2
+    bottom = pad_h - top
+    left = pad_w // 2
+    right = pad_w - left
+
+    return cv2.copyMakeBorder(
+        img, top, bottom, left, right, borderType=cv2.BORDER_CONSTANT, value=0
+    )
+
+
 def crop_well(frame, well):
     """
-    Crop a circular well region from the frame and mask outside the circle.
+    Crop a well ROI from the frame.
+
+    Supports:
+    - circular wells: (cx, cy, r)
+    - rectangular/square ROIs: (x, y, w, h)
+
+    Circular ROIs are masked outside the circle.
+    Rectangular ROIs are returned unmasked.
     """
-    
+
+    # Ensure grayscale
     if frame.ndim == 3:
-        cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    x, y, r = map(int, well)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Compute bounding box
-    y1, y2 = y - r, y + r
-    x1, x2 = x - r, x + r
+    well = list(map(int, well))
 
-    # Crop square region
-    crop = frame[y1:y2, x1:x2].copy()
+    # ------------------------------------------------
+    # Case 1: CIRCULAR WELL (x, y, r)
+    # ------------------------------------------------
+    if len(well) == 3:
+        cx, cy, r = well
 
-    # Create circular mask
-    h, w = crop.shape[:2]
-    mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.circle(mask, (r, r), r, 255, -1)
+        y1, y2 = cy - r, cy + r
+        x1, x2 = cx - r, cx + r
 
-    # Apply mask
-    if crop.ndim == 2:
+        crop = frame[y1:y2, x1:x2].copy()
+
+        h, w = crop.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask, (r, r), r, 255, -1)
+
         crop[mask == 0] = 0
-    else:
-        crop[mask == 0] = (0, 0, 0)
+        return crop
 
-    return crop
+    # ------------------------------------------------
+    # Case 2: RECTANGULAR / SQUARE ROI (x, y, w, h)
+    # ------------------------------------------------
+    elif len(well) == 4:
+        x, y, w, h = well
+        crop = frame[y : y + h, x : x + w].copy()
+        return crop
+
+    else:
+        raise ValueError(
+            "ROI format not recognized. " "Expected (x, y, r) or (x, y, w, h)."
+        )
 
 
 def find_endpoints(skel):

@@ -45,7 +45,6 @@ class IDSCamera(Camera):
         
         self.exposure = self._node_value("ExposureTime")
         
-        gain_selector: peak.
         self._remote_map.FindNode("GainSelector").SetCurrentEntry("AnalogAll")
         self.gain = self._node_value("Gain")
 
