@@ -9,9 +9,9 @@ import h5py
 import time
 from concurrent.futures import ThreadPoolExecutor
 from Module.imageprocessing.foreground import extract_foreground
-from Module.Worms import WormTracker
+from Module.Tracking.Tracker import WormTracker
 from Module.dataset.video import open_dataset
-from Module.detection.Drawer import ROIDrawer
+from Module.dataset.Drawer import ROIDrawer
 from Module.imageprocessing.background import sample_per_well_backgrounds
 from Module.utils import (
     annotate_detections,

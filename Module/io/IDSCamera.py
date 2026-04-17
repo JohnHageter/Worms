@@ -1,212 +1,321 @@
-from enum import Enum
+from typing import Dict, Optional, Tuple, Type, Union, overload
+from typing_extensions import Literal
+from typing import cast
+
 import numpy as np
 import cv2
+
 from ids_peak import ids_peak as peak
 from ids_peak_ipl import ids_peak_ipl as peak_ipl
-from Module.io.Camera import Camera, CameraError
-from typing import Optional, Tuple, Any
 
-class Mode(Enum):
-    SINGLE_SHOT = 0
-    CONTINUOUS = 1
+from Module.io.Camera import (
+    Camera,
+    CameraError,
+    InvalidStateError,
+    Parameter,
+)
+
+
+CameraValue = Union[int, float]
+
+# ---------------------------------------------------------------------
+# Node registries
+# ---------------------------------------------------------------------
+
+_NODE_REGISTRY: Dict[str, Type[peak.Node]] = {
+    "AcquisitionFrameRate": peak.FloatNode,
+    "AcquisitionMode": peak.EnumerationNode,
+    "AcquisitionStart": peak.CommandNode,
+    "AcquisitionStop": peak.CommandNode,
+    "ExposureAuto": peak.EnumerationNode,
+    "ExposureMode": peak.EnumerationNode,
+    "ExposureTime": peak.FloatNode,
+    "Gain": peak.FloatNode,
+    "GainSelector": peak.EnumerationNode,
+    "GainAuto": peak.EnumerationNode,
+    "OffsetX": peak.IntegerNode,
+    "OffsetY": peak.IntegerNode,
+    "Width": peak.IntegerNode,
+    "Height": peak.IntegerNode,
+    "TLParamsLocked": peak.IntegerNode,
+    "UserSetSelector": peak.EnumerationNode,
+    "UserSetLoad": peak.CommandNode,
+}
+
+_NODETYPE_TO_CLASS: Dict[int, Type[peak.Node]] = {
+    peak.NodeType_Integer: peak.IntegerNode,
+    peak.NodeType_Float: peak.FloatNode,
+    peak.NodeType_Enumeration: peak.EnumerationNode,
+    peak.NodeType_Command: peak.CommandNode,
+    peak.NodeType_Boolean: peak.BooleanNode,
+    peak.NodeType_String: peak.StringNode,
+}
+
 
 class IDSCamera(Camera):
-    def __init__(self, index=0):
+
+    # -----------------------------------------------------------------
+    # Lifecycle
+    # -----------------------------------------------------------------
+
+    def __init__(self, index: int = 0) -> None:
         super().__init__()
+
         peak.Library.Initialize()
+
         self._index = index
-        self._device_manager: peak.DeviceManager = peak.DeviceManager.Instance()
-        self._cam: peak.Device
-        self._remote_device: peak.RemoteDevice
-        self._remote_map: peak.NodeMap
-        self._datastream: peak.DataStream
-        self._latest_frame: Optional[np.ndarray]
-        self._mode: Mode = Mode.CONTINUOUS
-        
-        self.frame_rate: float
-        self.exposure: float
-        self.gain: float
-        self.watch_window: Tuple[float,float,float,float]
+        self._device_manager = peak.DeviceManager.Instance()
+
+        self._cam: Optional[peak.Device] = None
+        self._remote_device: Optional[peak.RemoteDevice] = None
+        self._remote_map: Optional[peak.NodeMap] = None
+        self._datastream: Optional[peak.DataStream] = None
+
+        self._continuous: bool = False
+        self._latest_frame: Optional[np.ndarray] = None
 
     def _open(self) -> None:
         self._device_manager.Update()
-        if self._device_manager.Devices().empty():
-            raise CameraError("No IDS Peak camera found")
+        devices = self._device_manager.Devices()
 
-        self._cam = self._device_manager.Devices()[self._index].OpenDevice(
-            peak.DeviceAccessType_Control
-        )
+        if devices.empty():
+            raise CameraError("No IDS Peak camera detected")
+
+        self._cam = devices[self._index].OpenDevice(peak.DeviceAccessType_Control)
 
         self._remote_device = self._cam.RemoteDevice()
         self._remote_map = self._remote_device.NodeMaps()[0]
-        width = self._remote_map.FindNode("Width").Value()
-        height = self._remote_map.FindNode("Height").Value()
-        self.watch_window = (0, width, 0, height)
-        
-        self.exposure = self._node_value("ExposureTime")
-        
-        self._remote_map.FindNode("GainSelector").SetCurrentEntry("AnalogAll")
-        self.gain = self._node_value("Gain")
 
-        self._latest_frame = None
+        # -------------------------------------------------------------
+        # Ensure acquisition is STOPPED (CRITICAL)
+        # -------------------------------------------------------------
+        acq_stop = self._remote_map.FindNode("AcquisitionStop")
+        if acq_stop and acq_stop.IsWriteable():
+            acq_stop.Execute()
+            acq_stop.WaitUntilDone()
+            
+
+        # -------------------------------------------------------------
+        # Load default UserSet
+        # -------------------------------------------------------------
+        userset = self._find_node("UserSetSelector")
+        if userset.IsWriteable():
+            userset.SetCurrentEntry("Default")
+            self._find_node("UserSetLoad").Execute()
+            self._find_node("UserSetLoad").WaitUntilDone()
+
+        # -------------------------------------------------------------
+        # Disable auto features (CORRECT ORDER)
+        # -------------------------------------------------------------
+        exposure_auto = self._find_node("ExposureAuto")
+        if exposure_auto.IsAvailable() and exposure_auto.IsWriteable():
+            exposure_auto.SetCurrentEntry("Off")
+
+        gain_auto = self._find_node("GainAuto")
+        if gain_auto.IsAvailable() and gain_auto.IsWriteable():
+            gain_auto.SetCurrentEntry("Off")
+
+        # -------------------------------------------------------------
+        # Full-frame watch window
+        # -------------------------------------------------------------
+        width = self._find_node("Width").Maximum()
+        height = self._find_node("Height").Maximum()
+        self.watch_window = (0, width, 0, height)
+
         self._continuous = False
+        self._latest_frame = None
 
     def _close(self) -> None:
-        del self._cam
+        if self._continuous:
+            self._do_stop_stream()
+
+        del self.cam
+
         peak.Library.Close()
 
-    def _set(self, key, value) -> bool:
+    # -----------------------------------------------------------------
+    # Typed node access (authoritative)
+    # -----------------------------------------------------------------
+
+    @overload
+    def _find_node(
+        self, key: Literal["ExposureTime", "Gain", "AcquisitionFrameRate"]
+    ) -> peak.FloatNode: ...
+
+    @overload
+    def _find_node(
+        self, key: Literal["OffsetX", "OffsetY", "Width", "Height", "TLParamsLocked"]
+    ) -> peak.IntegerNode: ...
+
+    @overload
+    def _find_node(
+        self,
+        key: Literal["ExposureAuto", "ExposureMode", "GainSelector", "UserSetSelector"],
+    ) -> peak.EnumerationNode: ...
+
+    @overload
+    def _find_node(
+        self, key: Literal["UserSetLoad", "AcquisitionStart", "AcquisitionStop"]
+    ) -> peak.CommandNode: ...
+
+    @overload
+    def _find_node(self, key: str) -> peak.Node: ...
+
+    def _find_node(self, key: str) -> peak.Node:
         if not self._remote_map:
-            return False
+            raise InvalidStateError("Camera not open")
 
-        if key == "exposure":
-            # IDS sets exposure in nanoseconds
-            value = value * 1e6
-            min_exposure = self._remote_map.FindNode("ExposureTime").Minimum()
-            max_exposure = self._remote_map.FindNode("ExposureTime").Maximum()
-            if value < max_exposure and value > min_exposure:
-                self._remote_map.FindNode("ExposureTime").SetValue(value)
-                return True
-            return False
-        elif key == "gain":
-            node = self._remote_map.FindNode("Gain")
-            min_gain, max_gain = node.Minimum(), node.Maximum()
-            if min_gain < value < max_gain:
-                node.SetValue(value)
-                return True
-            return False
-        elif key == "fps":
-            ret = self._set_framerate(value)
-            return ret
-        else:
-            return False
+        node = self._remote_map.FindNode(key)
 
-    def _set_framerate(self, fps) -> bool:
-        if fps <= 0:
-            raise CameraError("Frame rate must be above 0")
+        expected_cls = _NODE_REGISTRY.get(key)
+        runtime_cls = _NODETYPE_TO_CLASS.get(node.Type())
 
-        if not self._remote_map:
-            raise CameraError("Camera not open.")
+        if expected_cls and runtime_cls and runtime_cls is not expected_cls:
+            raise CameraError(
+                f"Node '{key}' expected {expected_cls.__name__}, "
+                f"but device reports {runtime_cls.__name__}"
+            )
 
-        # We just free run the camera and make sure that we're not exceeding hardware capabilities.
-        # limit frame rate by pulling at necessary intervals elsewhere
+        return node
+
+    # -----------------------------------------------------------------
+    # Parameter handling
+    # -----------------------------------------------------------------
+
+    def _set(self, parameter: Parameter, value: CameraValue) -> bool:
+        was_streaming = self._continuous
+
         try:
-            node = self._remote_map.FindNode("AcquisitionFrameRate")
-            max_fps = node.Maximum()
-            min_fps = node.Minimum()
+            if was_streaming:
+                self._do_stop_stream()
 
-            fps = max(min(fps, max_fps), min_fps)
-            node.SetValue(fps)
-            applied = node.Value()
-            self._camera_fps = applied
+            if parameter == Parameter.EXPOSURE:
+                self._find_node("ExposureTime").SetValue(float(value))
+                return True
 
-            return abs(applied - fps) < 1e3
+            if parameter == Parameter.GAIN:
+                self._find_node("Gain").SetValue(float(value))
+                return True
+
+            return False
+
         except Exception:
             return False
 
-    def _watch(self, x_start, width, y_start, height):
+        finally:
+            if was_streaming:
+                try:
+                    self._do_start_stream()
+                except Exception:
+                    pass 
+
+
+    # -----------------------------------------------------------------
+    # Watch window (ROI)
+    # -----------------------------------------------------------------
+
+
+    def _apply_roi_constraints(self, x, y, w, h):
+        offx = self._find_node("OffsetX")
+        offy = self._find_node("OffsetY")
+        width = self._find_node("Width")
+        height = self._find_node("Height")
+
+        x = (x // offx.Increment()) * offx.Increment()
+        y = (y // offy.Increment()) * offy.Increment()
+        w = (w // width.Increment()) * width.Increment()
+        h = (h // height.Increment()) * height.Increment()
+
+        return x, y, w, h
+
+
+    def _watch(self, x_off: int, width: int, y_off: int, height: int) -> bool:
+        try:
+            was_streaming = self._continuous
+            if was_streaming:
+                self._do_stop_stream()
+
+            x, y, w, h = self._apply_roi_constraints(x_off, y_off, width, height)
+            self._find_node("Width").SetValue(w)
+            self._find_node("Height").SetValue(h)
+            self._find_node("OffsetX").SetValue(x)
+            self._find_node("OffsetY").SetValue(y)
+
+            self.watch_window = (x_off, width, y_off, height)
+            return True
+
+        except Exception as e:
+            print("ROI set failed:", e)
+            return False
+
+        finally:
+            if was_streaming:
+                self._do_start_stream()
+
+
+    def _reset_watch_window(self) -> None:
         if not self._remote_map:
             return
+        w = self._find_node("Width").Maximum()
+        h = self._find_node("Height").Maximum()
+        self._watch(0, w, 0, h)
 
-        x_start = max(0, min(x_start, self._remote_map.FindNode("Width").Maximum() - 1))
-        y_start = max(
-            0, min(y_start, self._remote_map.FindNode("Height").Maximum() - 1)
-        )
-        width = min(width, self._remote_map.FindNode("Width").Maximum() - x_start)
-        height = min(height, self._remote_map.FindNode("Height").Maximum() - y_start)
-        self._remote_map.FindNode("OffsetX").SetValue(x_start)
-        self._remote_map.FindNode("OffsetY").SetValue(y_start)
-        self._remote_map.FindNode("Width").SetValue(width)
-        self._remote_map.FindNode("Height").SetValue(height)
-        self.watch_window = x_start, width, y_start, height
+    # -----------------------------------------------------------------
+    # Streaming
+    # -----------------------------------------------------------------
 
-    def _reset_watch_window(self):
-        if not self._remote_map:
+    def _prepare_datastream(self) -> None:
+        self._datastream = self._cam.DataStreams()[0].OpenDataStream()
+        payload = self._remote_map.FindNode("PayloadSize").Value()
+        min_buffers = self._datastream.NumBuffersAnnouncedMinRequired()
+
+        for _ in range(min_buffers * 5):
+            buf = self._datastream.AllocAndAnnounceBuffer(payload)
+            self._datastream.QueueBuffer(buf)
+
+    def _do_start_stream(self) -> None:
+        if not self._datastream:
+            self._prepare_datastream()
+
+        self._find_node("TLParamsLocked").SetValue(1)
+        self._datastream.StartAcquisition()
+        self._find_node("AcquisitionStart").Execute()
+        self._find_node("AcquisitionStart").WaitUntilDone()
+        self._continuous = True
+
+    def _do_stop_stream(self) -> None:
+        if not self._continuous:
             return
 
-        x_start = 0
-        y_start = 0
-        width = self._remote_map.FindNode("Width").Maximum()
-        height = self._remote_map.FindNode("Height").Maximum()
-        self._remote_map.FindNode("OffsetX").SetValue(x_start)
-        self._remote_map.FindNode("OffsetY").SetValue(y_start)
-        self._remote_map.FindNode("Width").SetValue(width)
-        self._remote_map.FindNode("Height").SetValue(height)
-        self.watch_window = x_start, width, y_start, height
+        self._find_node("AcquisitionStop").Execute()
+        self._datastream.StopAcquisition(peak.AcquisitionStopMode_Default)
+        self._datastream.Flush(peak.DataStreamFlushMode_DiscardAll)
+        self._find_node("TLParamsLocked").SetValue(0)
+        self._continuous = False
 
-    def _read_frame(self) -> Tuple[bool, np.ndarray | None]:
-        if not self._cam or not self._remote_map:
-            return False, None
+    def _read_frame(self) -> Tuple[bool, Optional[np.ndarray]]:
+        if not self._continuous:
+            self._do_start_stream()
 
         try:
-            if not self._datastream:
-                self._prepare_datastream()
+            buffer = self._datastream.WaitForFinishedBuffer(1000)
+            img = peak_ipl.Image.CreateFromSizeAndBuffer(
+                buffer.PixelFormat(),
+                buffer.BasePtr(),
+                buffer.Size(),
+                buffer.Width(),
+                buffer.Height(),
+            ).get_numpy_2D()
 
-            frame = self._do_grab_frame(timeout_s=1.0)
+            self._datastream.QueueBuffer(buffer)
 
-            if frame is None:
-                return False, None
+            frame = cv2.cvtColor(
+                np.ascontiguousarray(img, dtype=np.uint8),
+                cv2.COLOR_GRAY2BGR,
+            )
 
+            self._latest_frame = frame
             return True, frame
 
         except Exception:
             return False, None
-
-    ### IDS Helpers for base class
-
-    def _prepare_datastream(self):
-        if not self._cam or not self._remote_map:
-            return
-        self._datastream = self._cam.DataStreams()[self._index].OpenDataStream()
-        payload = self._remote_map.FindNode("PayloadSize").Value()
-        num_buffers = self._datastream.NumBuffersAnnouncedMinRequired()
-        for _ in range(num_buffers):
-            buf = self._datastream.AllocAndAnnounceBuffer(payload)
-            self._datastream.QueueBuffer(buf)
-
-    def _do_start_stream(self):
-        if not self._datastream:
-            self._prepare_datastream()
-
-        assert self._datastream is not None
-        assert self._remote_map is not None
-        self._datastream.StartAcquisition(
-            peak.AcquisitionStopMode_Default, peak.DataStream.INFINITE_NUMBER
-        )
-        self._remote_map.FindNode("TLParamsLocked").SetValue(1)
-        self._remote_map.FindNode("AcquisitionStart").Execute()
-        self._continuous = True
-
-    def _do_stop_stream(self):
-        if self._continuous:
-            if not self._datastream or not self._remote_map:
-                return
-            self._datastream.StopAcquisition(peak.AcquisitionStopMode_Default)
-            self._remote_map.FindNode("TLParamsLocked").SetValue(0)
-            self._continuous = False
-
-    def _do_grab_frame(self, timeout_s: float):
-        if not self._remote_map or not self._datastream:
-            return
-
-        if not self._continuous:
-            self._do_start_stream()
-        buffer = self._datastream.WaitForFinishedBuffer(int(timeout_s * 1000))
-        img = peak_ipl.Image.CreateFromSizeAndBuffer(
-            buffer.PixelFormat(),
-            buffer.BasePtr(),
-            buffer.Size(),
-            buffer.Width(),
-            buffer.Height(),
-        ).get_numpy_2D()
-        self._datastream.QueueBuffer(buffer)
-        img_array = np.ascontiguousarray(img.copy(), dtype=np.uint8)
-        frame = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
-        self._latest_frame = frame
-        return frame
-
-
-    def _node_value(self, key: str) -> Any:
-        node = self._remote_map.FindNode(key)
-        value = node.Value()
-        return value

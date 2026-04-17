@@ -35,9 +35,9 @@ class ROIDrawer:
             if key == 27:  # ESC → finish
                 break
             elif key == ord("+") or key == ord("="):
-                self.radius += 1
+                self.radius += 10
             elif key == ord("-") and self.radius > 1:
-                self.radius -= 1
+                self.radius -= 10
 
         cv2.destroyWindow("Draw Wells")
         return self.wells

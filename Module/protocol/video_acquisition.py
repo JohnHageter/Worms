@@ -2,7 +2,7 @@ import time
 import os
 from pathlib import Path
 
-from Module.protocol.protocol import Protocol
+from Module.protocol.well_processor import Protocol
 from Module.io.Camera import Camera
 from dataclasses import dataclass
 from typing import Tuple

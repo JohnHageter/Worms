@@ -10,10 +10,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from Module.dataset.video import open_dataset
-from Module.Worms import WormTracker
+from Module.Tracking.Tracker import WormTracker
 from Module.imageprocessing.background import sample_per_well_backgrounds
 from Module.imageprocessing.foreground import extract_foreground
-from Module.detection.Drawer import ROIDrawer
+from Module.dataset.Drawer import ROIDrawer
 from Module.utils import (
     crop_well,
     create_region_mask,

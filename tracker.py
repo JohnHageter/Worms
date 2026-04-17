@@ -1,14 +1,14 @@
 import cv2
 import numpy as np
 from pathlib import Path
-from Module.Worms import WormTracker
-from Module.detection.Arena import detect_wells
+from Module.Tracking.Tracker import WormTracker
+from Module.dataset.Arena import detect_wells
 from Module.imageprocessing.background import sample_background
 from Module.imageprocessing.foreground import extract_foreground
 from Module.utils import *
 from Module.dataset.video import *
 from Module.imageprocessing.ImageProcessor import *
-from Module.detection.Arena import (
+from Module.dataset.Arena import (
     detect_wells,
     detect_wells_interactive,
     WellDetectionParams,

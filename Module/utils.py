@@ -64,31 +64,26 @@ def annotate_frame_metadata(frame, frame_idx=0, video_idx=0, num_worms=0, fps=2)
 
 
 def annotate_detections(frame, dets):
-    # Ensure color image for drawing
-
     if frame.ndim == 2:
         annotated = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
     else:
         annotated = frame.copy()
 
     for det in dets:
-        # Choose color by region
         color = (
             (0, 255, 0) if det.region == 'core' else (0, 165, 255)
         )
 
-        # ---- Draw centroid ----
         if det.centroid is not None:
             x, y = map(int, det.centroid)
-            cv2.circle(annotated, (x, y), 3, color, -1)
+            cv2.circle(annotated, (x, y), 2, color, -1)
 
-        # ---- Draw endpoints ----
         for endpoint in (det.end1, det.end2):
             if endpoint is None:
                 continue
 
             ex, ey = map(int, endpoint)
-            cv2.circle(annotated, (ex, ey), 3, color, -1)
+            cv2.circle(annotated, (ex, ey), 2, color, -1)
 
     return annotated
 
@@ -136,9 +131,7 @@ def annotate_region_boundaries(
 
     h, w = annotated.shape[:2]
 
-    # --------------------------------------------------
-    # Case 1: CIRCULAR WELL (cx, cy, r)
-    # --------------------------------------------------
+
     if len(well) == 3:
         _, _, r = map(int, well)
         cx, cy = w // 2, h // 2
@@ -161,9 +154,7 @@ def annotate_region_boundaries(
             thickness,
         )
 
-    # --------------------------------------------------
-    # Case 2: RECTANGULAR / SQUARE ROI (x, y, w, h)
-    # --------------------------------------------------
+
     elif len(well) == 4:
         # Outer rectangle
         cv2.rectangle(
@@ -196,6 +187,11 @@ def annotate_tracks(
 ):
     ox, oy = offset
 
+    if frame.ndim == 2:
+        annotated = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    else:
+        annotated = frame.copy()
+
     for t in tracks:
         if t.centroid is None:
             continue
@@ -203,9 +199,9 @@ def annotate_tracks(
         cx = int((t.centroid[0] - ox) * scale)
         cy = int((t.centroid[1] - oy) * scale)
 
-        cv2.circle(frame, (cx, cy), 3, (0, 255, 0), -1)
+        cv2.circle(annotated, (cx, cy), 2, (0, 255, 0), -1)
         cv2.putText(
-            frame,
+            annotated,
             str(t.id),
             (cx + 5, cy - 5),
             cv2.FONT_HERSHEY_SIMPLEX,
@@ -214,17 +210,19 @@ def annotate_tracks(
             1,
         )
 
-        if t.head is not None:
-            hx = int((t.head[0] - ox) * scale)
-            hy = int((t.head[1] - oy) * scale)
-            cv2.rectangle(frame, (hx - 3, hy - 3), (hx + 3, hy + 3), (255, 0, 0), -1)
+        if t.features.get('head') is not None:
+            head = t.features.get("head")
+            hx, hy = map(int, head)
+            cv2.rectangle(
+                annotated, (hx - 2, hy - 2), (hx + 2, hy + 2), (255, 0, 0), -1
+            )
 
-        if t.tail is not None:
-            tx = int((t.tail[0] - ox) * scale)
-            ty = int((t.tail[1] - oy) * scale)
-            cv2.circle(frame, (tx, ty), 3, (0, 0, 255), -1)
+        if t.features.get('tail') is not None:
+            tail = t.features.get("tail")
+            tx, ty = map(int, tail)
+            cv2.circle(annotated, (tx, ty), 2, (0, 0, 255), -1)
 
-    return frame
+    return annotated
 
 
 def stitch_wells(well_crops, crop_shape):
@@ -364,53 +362,38 @@ def pad_to_size(img, target_h, target_w):
 
 
 def crop_well(frame, well):
-    """
-    Crop a well ROI from the frame.
-
-    Supports:
-    - circular wells: (cx, cy, r)
-    - rectangular/square ROIs: (x, y, w, h)
-
-    Circular ROIs are masked outside the circle.
-    Rectangular ROIs are returned unmasked.
-    """
-
-    # Ensure grayscale
     if frame.ndim == 3:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
     well = list(map(int, well))
+    H, W = frame.shape[:2]
 
-    # ------------------------------------------------
-    # Case 1: CIRCULAR WELL (x, y, r)
-    # ------------------------------------------------
     if len(well) == 3:
         cx, cy, r = well
-
-        y1, y2 = cy - r, cy + r
         x1, x2 = cx - r, cx + r
+        y1, y2 = cy - r, cy + r
 
-        crop = frame[y1:y2, x1:x2].copy()
+        x1c, x2c = max(0, x1), min(W, x2)
+        y1c, y2c = max(0, y1), min(H, y2)
+
+        crop = frame[y1c:y2c, x1c:x2c].copy()
 
         h, w = crop.shape[:2]
         mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.circle(mask, (r, r), r, 255, -1)
+        cx_crop = cx - x1c
+        cy_crop = cy - y1c
+        cv2.circle(mask, (cx_crop, cy_crop), r, 255, -1)
 
         crop[mask == 0] = 0
         return crop
 
-    # ------------------------------------------------
-    # Case 2: RECTANGULAR / SQUARE ROI (x, y, w, h)
-    # ------------------------------------------------
     elif len(well) == 4:
         x, y, w, h = well
-        crop = frame[y : y + h, x : x + w].copy()
-        return crop
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(W, x + w), min(H, y + h)
+        return frame[y1:y2, x1:x2].copy()
 
-    else:
-        raise ValueError(
-            "ROI format not recognized. " "Expected (x, y, r) or (x, y, w, h)."
-        )
+    raise ValueError("ROI format not recognized. Expected (cx, cy, r) or (x, y, w, h).")
 
 
 def find_endpoints(skel):

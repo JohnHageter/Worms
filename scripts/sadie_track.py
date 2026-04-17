@@ -9,9 +9,9 @@ import h5py
 import time
 from concurrent.futures import ThreadPoolExecutor
 from Module.imageprocessing.foreground import extract_foreground
-from Module.Worms import WormTracker
+from Module.Tracking.Tracker import WormTracker
 from Module.dataset.video import open_dataset
-from Module.detection.Drawer import ROIDrawer, RectROIDrawer
+from Module.dataset.Drawer import ROIDrawer, RectROIDrawer
 from Module.imageprocessing.background import sample_per_well_backgrounds
 from Module.utils import (
     annotate_detections,
@@ -38,7 +38,7 @@ DATA_OUT_DIR.mkdir(parents=True, exist_ok=True)
 # cap = cv2.VideoCapture(str(video_paths[0]))
 # ret, frame = cap.read()
 # drawer = RectROIDrawer(frame)
-# rois = drawer.draw()
+# WELLS = drawer.draw()
 # drawer.save("Sadie_ROIS.npy")
 WELLS = RectROIDrawer.load("Sadie_ROIS.npy")
 WELL_BACKGROUNDS = {}
@@ -163,10 +163,10 @@ try:
 
             while True:
                 ret, frame = cap.read()
-                
-                if frame_idx < 300:
-                    frame_idx += 1
-                    continue
+
+                # if frame_idx < 300:
+                #     frame_idx += 1
+                #     continue
 
                 if not ret:
                     break

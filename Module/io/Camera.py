@@ -5,7 +5,7 @@ from typing import Optional, Any, Tuple
 import numpy as np
 import time
 
-class Paramter(Enum):
+class Parameter(Enum):
     FRAME_RATE = 0
     EXPOSURE = 1
     GAIN = 2
@@ -47,6 +47,8 @@ class Camera(ABC):
             return True
         except Exception as e:
             self._is_open = False
+
+            print(type(e).__name__, e)
             raise CameraError("Failed to open camera.") from e
 
     def close(self) -> None:
@@ -75,7 +77,7 @@ class Camera(ABC):
         except Exception:
             return False
 
-    def set(self, parameter: str, value: Any) -> bool:
+    def set(self, parameter: Parameter, value: Any) -> bool:
         """
         Set a camera parameter (exposure, gain, fps, etc).
         """
@@ -99,11 +101,9 @@ class Camera(ABC):
         if not self._is_open:
             raise InvalidStateError("Camera must be opened before reading.")
 
-
         success, frame = self._read_frame()
         timestamp = time.perf_counter()
         return success, frame, timestamp
-
 
     @abstractmethod
     def _open(self) -> None:
@@ -121,7 +121,7 @@ class Camera(ABC):
         ...
 
     @abstractmethod
-    def _set(self, parameter: str, value: Any) -> bool:
+    def _set(self, parameter: Parameter, value: Any) -> bool:
         """
         Backend-specific parameter setter.
         Return False if unsupported or rejected.
