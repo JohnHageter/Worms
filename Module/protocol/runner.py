@@ -12,17 +12,19 @@ import cv2
 from Module.Tracking.Configuration import TrackingParameters
 from Module.Tracking.Tracker import MultiOrganismTracker
 from Module.dataset.Dataset import TrackingDataset
-
 from Module.dataset.video import open_dataset
 from Module.dataset.Drawer import ROIDrawer, RectROIDrawer
 from Module.imageprocessing.background import sample_per_well_backgrounds
+from Module.imageprocessing.background import RollingMedianBackground
 from Module.utils import (
     annotate_frame_metadata,
     display_frame,
     stitch_wells,
 )
-
-from Module.protocol.well_processor import WellContext, WellProcessor
+from Module.imageprocessing.well_processor import (
+    WellContext,
+    WellProcessor,
+)
 
 
 @dataclass
@@ -46,6 +48,7 @@ class AppConfig:
     wall_width_region: int = 16
     wall_width_draw: int = 8
     region_boundary_thickness: int = 1
+    coords_are_full_frame: bool = True
 
     debug: bool = False
 
@@ -74,10 +77,13 @@ class TrackingRunner:
         else:
             self.wells = ROIDrawer.load(self.cfg.roi_path)
 
-        self.well_backgrounds = self._sample_backgrounds()
+        # 1. Sample a static background (only for seeding the rolling background)
+        self.static_backgrounds = self._sample_backgrounds()
 
+        # 2. Build contexts (now with RollingMedianBackground)
         self.contexts = self._build_contexts()
 
+        # 3. Instantiate the improved WellProcessor
         self.processor = WellProcessor(
             self.contexts,
             foreground_thresh_val=self.cfg.foreground_thresh_val,
@@ -94,6 +100,7 @@ class TrackingRunner:
         self.proc_frames = 0
 
     def _sample_backgrounds(self) -> Dict[int, np.ndarray]:
+        """Sample a clean static background from the first video."""
         cap_bg = open_dataset(self.video_paths[0])
         bgs = sample_per_well_backgrounds(cap_bg, self.wells, n_frames=1500)
         cap_bg.release()
@@ -102,19 +109,24 @@ class TrackingRunner:
     def _build_contexts(self) -> List[WellContext]:
         contexts: List[WellContext] = []
         for well_id in range(len(self.wells)):
+            # Create the improved tracker
             tracker = MultiOrganismTracker(self.params)
 
-            h5_path = self.cfg.out_dir / f"well_{well_id}.h5"
-            dataset = TrackingDataset(str(h5_path), self.params)
+            # Create a rolling background per well, seeded with the static background
+            rolling_bg = RollingMedianBackground(history=300, update_every=10)
+            rolling_bg.background = self.static_backgrounds[well_id].copy()
 
+            # Build WellContext (now expects rolling_bg, not background)
             wc = WellContext(
                 well_id=well_id,
                 roi=self.wells[well_id],
-                background=self.well_backgrounds[well_id],
+                rolling_bg=rolling_bg,  # <-- key change
                 tracker=tracker,
                 region_mask=None,
             )
-            wc.dataset = dataset  # type: ignore[attr-defined]
+            # Attach dataset (remains the same)
+            h5_path = self.cfg.out_dir / f"well_{well_id}.h5"
+            wc.dataset = TrackingDataset(str(h5_path), self.params)  # type: ignore[attr-defined]
             contexts.append(wc)
         return contexts
 
@@ -177,7 +189,6 @@ class TrackingRunner:
             if frame_idx % self.cfg.video_write_every_n == 0:
                 self.out_video.write(stitched)
 
-
         if self.cfg.preview and frame_idx % 5 == 0:
             display_frame("All Wells", stitched)
 
@@ -196,8 +207,6 @@ class TrackingRunner:
                         ret, frame = cap.read()
                         if not ret:
                             break
-                        
-                        
 
                         if frame.ndim == 3:
                             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -206,6 +215,7 @@ class TrackingRunner:
                             frame_idx += 1
                             continue
 
+                        # Process wells in parallel (each well uses its own rolling background)
                         well_results = list(
                             executor.map(
                                 self.processor.process,
@@ -217,17 +227,14 @@ class TrackingRunner:
                         annotated_wells, tracks_per_well = zip(*well_results)
 
                         self._write_tracks(video_idx, frame_idx, tracks_per_well)
-
                         self._stitch_display_save(
                             annotated_wells, tracks_per_well, video_idx, frame_idx
                         )
-                        
-                        
+
                         key = cv2.waitKey(1) & 0xFF
                         if key == ord("q"):
                             print("Skipping to next video...")
                             break
-
 
                         frame_idx += 1
                         self.proc_frames += 1
@@ -248,26 +255,3 @@ class TrackingRunner:
 
             cv2.destroyAllWindows()
             print("\nDone.")
-
-
-if __name__ == "__main__":
-    cfg = AppConfig(
-        video_dir=Path("D:/Tracking_Data/Sachi/T3/week_1/"),
-        out_dir=Path("D:/Tracking_Data/Sachi/T3/week_1_out_v3"),
-        frame_step=1,
-        capture_fps=2,
-        save_video=False,
-    )
-
-    params = TrackingParameters(
-        max_detectable_blobs=50,
-        min_blob_area=20,
-        min_skeleton_length=20.0,
-        max_missed_frames=10000,
-        max_match_distance=500.0,
-        min_speed_for_headtail=3.0,
-        reid_grace_frames=1000,
-        reid_max_distance=120.0,
-    )
-
-    TrackingRunner(cfg, params).run()
