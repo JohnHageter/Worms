@@ -39,7 +39,7 @@ def sample_background(video, n_frames=300, seed=None) -> np.ndarray:
         raise RuntimeError("No frames could be read for background sampling.")
 
     stack = np.stack(frames, axis=0)
-    bg = np.median(stack, axis=0)
+    bg = np.max(stack, axis=0)
 
     bg = (bg * 255).astype(np.uint8)
 
@@ -77,12 +77,11 @@ def sample_per_well_backgrounds(
             crop = crop_well(gray, well)
             accum[well_id].append(crop)
 
-    # Median background per well
     backgrounds = {}
     for well_id, crops in accum.items():
         if len(crops) == 0:
             raise RuntimeError(f"No background frames for well {well_id}")
-        backgrounds[well_id] = np.median(np.stack(crops, axis=0), axis=0).astype(
+        backgrounds[well_id] = np.max(np.stack(crops, axis=0), axis=0).astype(
             np.uint8
         )
 
@@ -94,10 +93,9 @@ def sample_per_well_backgrounds_masked(
     wells,
     n_frames=2000,
     motion_thresh=8,
-    frame_step=5,  # NEW: compare frames 5 apart
+    frame_step=5,  
 ):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    # Take every `frame_step`-th frame to spread out samples
     sample_indices = list(range(0, total_frames, max(1, total_frames // n_frames)))[
         :n_frames
     ]
@@ -116,11 +114,9 @@ def sample_per_well_backgrounds_masked(
         for i, well in enumerate(wells):
             crop = crop_well(gray, well).astype(np.uint8)
 
-            # Initialize exclusion mask
             if exclusion_masks[i] is None:
                 exclusion_masks[i] = np.zeros(crop.shape, dtype=bool)
 
-            # Compare with previous crop (if exists, and spaced by frame_step)
             if prev_crops[i] is not None:
                 diff = cv2.absdiff(crop, prev_crops[i])
                 moving = diff > motion_thresh
@@ -129,15 +125,12 @@ def sample_per_well_backgrounds_masked(
             prev_crops[i] = crop
             stacks[i].append(crop)
 
-    # Build backgrounds using masked median
     backgrounds = {}
     for i, frames in stacks.items():
         stack = np.stack(frames).astype(np.float32)
-        # Apply exclusion mask: set moving pixels to NaN
         mask = exclusion_masks[i]
         stack[:, mask] = np.nan
         bg = np.nanmedian(stack, axis=0)
-        # Fill remaining NaNs with global median
         if np.any(np.isnan(bg)):
             global_med = np.nanmedian(bg)
             bg[np.isnan(bg)] = global_med
@@ -147,42 +140,54 @@ def sample_per_well_backgrounds_masked(
 
 
 class RollingMedianBackground:
-    def __init__(self, history=300, update_every=10, decay=0.95):
-        """
-        history: number of past frames to keep for median
-        update_every: recompute median every N frames (for speed)
-        decay: weight for old frames (exponential forgetting)
-        """
+    def __init__(self, history=300, update_every=100):
         self.history = history
         self.update_every = update_every
-        self.decay = decay
         self.frame_buffer = []
-        self.frame_count = 0
         self.background = None
+        self.frame_count = 0
 
-    def update(self, frame_gray):
-        """Call for every frame. Returns current background image."""
-        self.frame_buffer.append(frame_gray.astype(np.float32))
+    def update(self, frame_gray, fg_mask=None):
+        """
+        frame_gray : current well crop
+        fg_mask    : binary foreground mask (255 = foreground)
+        """
+        self.frame_count += 1
+
+        frame = frame_gray.copy()
+
+        if fg_mask is not None:
+            frame = frame.astype(np.float32)
+            frame[fg_mask > 0] = np.nan
+
+        self.frame_buffer.append(frame)
+
         if len(self.frame_buffer) > self.history:
             self.frame_buffer.pop(0)
 
-        self.frame_count += 1
-        if self.frame_count % self.update_every == 0:
-            # Weighted median – newer frames have higher weight?
-            # Simpler: compute median of buffer
-            stack = np.stack(self.frame_buffer, axis=0)
-            self.background = np.median(stack, axis=0).astype(np.uint8)
+    def recompute(self):
+        if not self.frame_buffer:
+            return
+        stack = np.stack(self.frame_buffer, axis=0)
+        self.background = np.median(stack, axis=0).astype(np.uint8)
 
-        if self.background is None:
-            # Not enough frames yet – return current frame as rough bg
-            return frame_gray
-        return self.background
 
-    def get_foreground(self, frame_gray, threshold=25):
-        """Return binary mask of moving objects."""
+    def get_foreground(self, frame_gray, rel_thresh=0.02, abs_thresh=8):
+        """
+        Detect dark objects on a bright background using
+        BOTH relative contrast and absolute difference.
+        """
         if self.background is None:
             return np.zeros_like(frame_gray, dtype=np.uint8)
-        diff = cv2.absdiff(frame_gray, self.background)
-        _, fg = cv2.threshold(diff, threshold, 255, cv2.THRESH_BINARY)
-        return fg
 
+        bg = self.background.astype(np.float32)
+        im = frame_gray.astype(np.float32)
+
+        diff = bg - im
+        rel = diff / (bg + 1e-6)
+
+        fg = np.zeros_like(frame_gray, dtype=np.uint8)
+
+        fg[(rel > rel_thresh) | (diff > abs_thresh)] = 255
+
+        return fg

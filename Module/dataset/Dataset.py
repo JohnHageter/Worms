@@ -26,13 +26,11 @@ class TrackingDataset:
     def __init__(self, path: str, params: TrackingParameters):
         self.h5 = h5py.File(path, "w")
 
-        # metadata: single JSON blob
         meta = params.to_json()
         self.h5.create_dataset(
             "metadata", data=np.array([meta], dtype=h5py.string_dtype())
         )
 
-        # tracking: append-only compound dtype
         self.h5.create_dataset(
             "tracking", shape=(0,), maxshape=(None,), dtype=TRACK_DTYPE, chunks=(8192,)
         )
@@ -43,7 +41,7 @@ class TrackingDataset:
         frame_idx: int,
         track_id: int,
         centroid: np.ndarray,
-        region: int,
+        area: int,
         head: Optional[np.ndarray],
         tail: Optional[np.ndarray],
         ht_conf: float = 0.0,
@@ -67,7 +65,7 @@ class TrackingDataset:
                 hy,
                 tx,
                 ty,
-                int(region),
+                float(area),
                 float(ht_conf),
             ),
             dtype=TRACK_DTYPE,

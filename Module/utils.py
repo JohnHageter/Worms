@@ -1,191 +1,199 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Iterable, List, Tuple, Optional
+
 import cv2
 import numpy as np
 
 
-def append_row(ds, row):
-    ds.resize(ds.shape[0] + 1, axis=0)
-    ds[-1] = row
+def append_row(ds, row) -> None:
+    """Append one row to a resizable HDF5 dataset."""
+    n = ds.shape[0]
+    ds.resize((n + 1,))
+    ds[n] = row
 
 
-def display_frame(title, frame):
-    cv2.imshow(title, frame)
-    cv2.waitKey(1)
+def open_video(video_path: str | Path) -> cv2.VideoCapture:
+    """Open a video safely."""
+    video_path = Path(video_path)
+    if not video_path.exists():
+        raise FileNotFoundError(video_path)
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {video_path}")
+    return cap
 
 
-def annotate_frame_metadata(frame, frame_idx=0, video_idx=0, num_worms=0, fps=2):
-    current_sec = frame_idx / fps
-
-    if frame.ndim != 3:
-        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-
-    H, _,_ = frame.shape
-
-    m, s = divmod(int(current_sec), 60)
-    h, m = divmod(m, 60)
-    cv2.putText(
-        frame,
-        f"Video: {video_idx}",
-        (5, 10),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (255, 255, 255),
-        1,
-    )
-    cv2.putText(
-        frame,
-        f"Frame: {frame_idx}",
-        (5, 21),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (255, 255, 255),
-        1,
-    )
-    cv2.putText(
-        frame,
-        f"Time: {h:03d}:{m:02d}:{s:02d}",
-        (5, 32),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (0, 255, 0),
-        1,
-    )
-
-    cv2.putText(
-        frame,
-        f"Num worms: {num_worms}",
-        (5, 43),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.4,
-        (0, 255, 0),
-        1,
-    )
-
-    return frame
+def create_writer(
+    file: str | Path,
+    *,
+    width: int,
+    height: int,
+    frame_rate: float,
+    is_color: bool = True,
+) -> cv2.VideoWriter:
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(file), fourcc, frame_rate, (width, height), is_color)
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not open VideoWriter for {file}")
+    return writer
 
 
-def annotate_detections(frame, dets):
-    if frame.ndim == 2:
-        annotated = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-    else:
-        annotated = frame.copy()
-
-    for det in dets:
-        color = (
-            (0, 255, 0) if det.region == 'core' else (0, 165, 255)
-        )
-
-        if det.centroid is not None:
-            x, y = map(int, det.centroid)
-            cv2.circle(annotated, (x, y), 2, color, -1)
-
-        for endpoint in (det.end1, det.end2):
-            if endpoint is None:
-                continue
-
-            ex, ey = map(int, endpoint)
-            cv2.circle(annotated, (ex, ey), 2, color, -1)
-
-    return annotated
+def load_grayscale_image(path: str | Path, scale: float = 1.0) -> np.ndarray:
+    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError(f"Could not read image {path}")
+    if scale != 1.0:
+        img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    return img
 
 
-def annotate_region_boundaries(
-    well_crop,
-    well,
-    wall_width=8,
-    color_outer=(0, 255, 0),  # green
-    color_inner=(255, 0, 0),  # blue
-    thickness=2,
-):
+def display_frame(title: str, frame: np.ndarray, delay: int = 1) -> None:
     """
-    Annotate region boundaries for circular or rectangular ROIs.
+    Display a frame in an OpenCV window for live preview/debug.
 
     Parameters
     ----------
-    well_crop : np.ndarray
-        Cropped well image (grayscale or BGR)
-    well : tuple
-        Either:
-            (cx, cy, r)     → circular well
-            (x, y, w, h)    → rectangular / square ROI
-        NOTE: Only geometry is used, not absolute position.
-    wall_width : int
-        Thickness of wall region (pixels)
-    color_outer : tuple
-        Color of outer boundary
-    color_inner : tuple
-        Color of core-wall boundary
-    thickness : int
-        Line thickness
-
-    Returns
-    -------
-    annotated : np.ndarray
-        Annotated BGR image
+    title : str
+        Window title.
+    frame : np.ndarray
+        Grayscale or BGR image.
+    delay : int
+        Delay in milliseconds passed to cv2.waitKey.
     """
+    if frame.ndim == 2:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
 
-    # Ensure BGR
-    if well_crop.ndim == 2:
-        annotated = cv2.cvtColor(well_crop, cv2.COLOR_GRAY2BGR)
-    else:
-        annotated = well_crop.copy()
+    cv2.imshow(title, frame)
+    cv2.waitKey(delay)
 
-    h, w = annotated.shape[:2]
 
+def crop_well(frame: np.ndarray, well) -> np.ndarray:
+    """
+    Crop circular or rectangular ROI from frame.
+    Well formats:
+        (cx, cy, r)
+        (x, y, w, h)
+    """
+    if frame.ndim == 3:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    H, W = frame.shape[:2]
 
     if len(well) == 3:
-        _, _, r = map(int, well)
-        cx, cy = w // 2, h // 2
+        cx, cy, r = well
+        x1, y1 = cx - r, cy - r
+        x2, y2 = cx + r, cy + r
 
-        # Outer boundary
-        cv2.circle(
-            annotated,
-            (cx, cy),
-            r,
-            color_outer,
-            thickness,
-        )
+        x1c, x2c = max(0, x1), min(W, x2)
+        y1c, y2c = max(0, y1), min(H, y2)
 
-        # Core / wall boundary
-        cv2.circle(
-            annotated,
-            (cx, cy),
-            max(r - wall_width, 1),
-            color_inner,
-            thickness,
-        )
+        crop = frame[y1c:y2c, x1c:x2c].copy()
+        h, w = crop.shape[:2]
 
+        mask = np.zeros((h, w), np.uint8)
+        cv2.circle(mask, (cx - x1c, cy - y1c), r, 255, -1)
+        crop[mask == 0] = 0
+        return crop
 
     elif len(well) == 4:
-        # Outer rectangle
-        cv2.rectangle(
-            annotated,
-            (0, 0),
-            (w - 1, h - 1),
-            color_outer,
-            thickness,
-        )
+        x, y, w, h = well
+        x1, y1 = max(0, x), max(0, y)
+        x2, y2 = min(W, x + w), min(H, y + h)
+        return frame[y1:y2, x1:x2].copy()
 
-        # Inner (core) rectangle
-        cv2.rectangle(
-            annotated,
-            (wall_width, wall_width),
-            (w - wall_width - 1, h - wall_width - 1),
-            color_inner,
-            thickness,
-        )
+    raise ValueError("Invalid well format")
 
-    else:
-        raise ValueError(
-            "Invalid well format. Expected (cx, cy, r) or (x, y, w, h)."
-        )
 
-    return annotated
+def roi_origin_xy(well) -> Tuple[int, int]:
+    """Return top-left origin of ROI crop in full-frame coords."""
+    well = list(map(int, well))
+    if len(well) == 3:
+        cx, cy, r = well
+        return cx - r, cy - r
+    if len(well) == 4:
+        x, y, _, _ = well
+        return x, y
+    raise ValueError("Invalid well format")
+
+
+
+def create_region_mask(
+    shape: Tuple[int, int],
+    *,
+    radius: int,
+    wall_width: int,
+) -> np.ndarray:
+    """
+    0 = outside well
+    1 = core
+    2 = wall
+    """
+    h, w = shape
+    cx, cy = w // 2, h // 2
+    mask = np.zeros((h, w), np.uint8)
+
+    cv2.circle(mask, (cx, cy), radius - wall_width, 1, -1)
+    cv2.circle(mask, (cx, cy), radius, 2, -1)
+    cv2.circle(mask, (cx, cy), radius - wall_width, 0, -1)
+
+    return mask
+
+
+
+def annotate_frame_metadata(
+    frame: np.ndarray,
+    *,
+    frame_idx: int,
+    video_idx: int,
+    num_worms: int,
+    fps: float,
+) -> np.ndarray:
+    if frame.ndim == 2:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+    t = frame_idx / max(fps, 1e-6)
+    h, rem = divmod(int(t), 3600)
+    m, s = divmod(rem, 60)
+
+    cv2.putText(
+        frame,
+        f"Video {video_idx}  Frame {frame_idx}  {h:02d}:{m:02d}:{s:02d}  Worms {num_worms}",
+        (5, 15),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return frame
+
+
+def annotate_region_boundaries(
+    crop: np.ndarray,
+    *,
+    wall_width: int,
+    thickness: int = 1,
+) -> np.ndarray:
+    if crop.ndim == 2:
+        crop = cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR)
+
+    h, w = crop.shape[:2]
+    r = min(h, w) // 2
+    cx, cy = w // 2, h // 2
+
+    cv2.circle(crop, (cx, cy), r, (0, 255, 0), thickness)
+    cv2.circle(crop, (cx, cy), max(1, r - wall_width), (255, 0, 0), thickness)
+
+    return crop
 
 
 def annotate_tracks(
-    frame, tracks, offset=(0, 0), scale=1.0
-):
-    ox, oy = offset
+    frame: np.ndarray,
+    tracks,
+) -> np.ndarray:
 
     if frame.ndim == 2:
         annotated = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
@@ -196,256 +204,65 @@ def annotate_tracks(
         if t.centroid is None:
             continue
 
-        cx = int((t.centroid[0] - ox) * scale)
-        cy = int((t.centroid[1] - oy) * scale)
+        cx, cy = int(t.centroid[0]), int(t.centroid[1])
 
         cv2.circle(annotated, (cx, cy), 2, (0, 255, 0), -1)
+
         cv2.putText(
             annotated,
-            str(t.id),
-            (cx + 5, cy - 5),
+            f"{t.id}",
+            (cx + 4, cy - 4),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
+            0.4,
             (0, 255, 0),
             1,
+            cv2.LINE_AA,
         )
 
-        if t.features.get('head') is not None:
-            head = t.features.get("head")
-            hx, hy = map(int, head)
-            cv2.rectangle(
-                annotated, (hx - 2, hy - 2), (hx + 2, hy + 2), (255, 0, 0), -1
-            )
+        if hasattr(t, "predicted") and t.predicted is not None:
+            px, py = int(t.predicted[0]), int(t.predicted[1])
+            cv2.circle(annotated, (px, py), 2, (0, 0, 255), -1)
+            cv2.line(annotated, (cx, cy), (px, py), (255, 0, 0), 1)
 
-        if t.features.get('tail') is not None:
-            tail = t.features.get("tail")
-            tx, ty = map(int, tail)
-            cv2.circle(annotated, (tx, ty), 2, (0, 0, 255), -1)
+        endpoints = getattr(t, "endpoints", None)
+        ht = getattr(t, "ht_state", None)
+
+        if ht is not None and endpoints is not None:
+            if ht.head is not None:
+                hx, hy = int(ht.head[0]), int(ht.head[1])
+                cv2.circle(annotated, (hx, hy), 3, (255, 0, 0), -1)
+
+            if ht.tail is not None:
+                tx, ty = int(ht.tail[0]), int(ht.tail[1])
+                cv2.circle(annotated, (tx, ty), 3, (0, 0, 255), -1)
 
     return annotated
 
 
-def stitch_wells(well_crops, crop_shape):
-    """
-    Stitch well crops into a composite image.
+def stitch_wells(crops: List[np.ndarray], crop_shape: Tuple[int, int]) -> np.ndarray:
 
-    Parameters
-    ----------
-    well_crops : list[np.ndarray or None]
-        Each crop must be either:
-            - (H, W) grayscale
-            - (H, W, 3) BGR
-        None entries are replaced with black images.
-    crop_shape : tuple
-        (H, W) target spatial size
-    """
+    if len(crops) == 1:
+        c = crops[0]
+        if c is None:
+            H, W = crop_shape
+            return np.zeros((H, W, 3), np.uint8)
+        if c.ndim == 2:
+            return cv2.cvtColor(c, cv2.COLOR_GRAY2BGR)
+        return c
+
     H, W = crop_shape
 
     filled = []
-    
-    if len(well_crops) ==1:
-        composite = well_crops[0]
-        return composite
+    for c in crops:
+        if c is None:
+            filled.append(np.zeros((H, W, 3), np.uint8))
+        else:
+            if c.ndim == 2:
+                c = cv2.cvtColor(c, cv2.COLOR_GRAY2BGR)
+            filled.append(c)
 
-    for crop in well_crops:
-        # Replace None with black BGR
-        if crop is None:
-            filled.append(np.zeros((H, W, 3), dtype=np.uint8))
-            continue
-
-        # Convert grayscale → BGR
-        if crop.ndim == 2:
-            crop = cv2.cvtColor(crop, cv2.COLOR_GRAY2BGR)
-
-        # Sanity check
-        if crop.shape[:2] != (H, W):
-            raise ValueError(f"Crop has shape {crop.shape[:2]}, expected {(H, W)}")
-
-        filled.append(crop)
-
-    # Pad to even count (2 wells per row)
     if len(filled) % 2 == 1:
-        filled.append(np.zeros((H, W, 3), dtype=np.uint8))
+        filled.append(np.zeros((H, W, 3), np.uint8))
 
-    # Build rows
-    rows = []
-    for i in range(0, len(filled), 2):
-        rows.append(np.hstack(filled[i : i + 2]))
-
-    composite = np.vstack(rows)
-    return composite
-
-
-def create_square_region_mask(shape, margin):
-    h, w = shape
-    mask = np.ones((h, w), dtype=np.uint8)
-
-    mask[:margin, :] = 2  # top wall
-    mask[-margin:, :] = 2  # bottom wall
-    mask[:, :margin] = 2  # left wall
-    mask[:, -margin:] = 2  # right wall
-
-    mask[mask != 2] = 1  # core
-    return mask
-
-
-def create_region_mask(shape, radius, wall_width=8):
-    """
-    Create a region mask for a single well crop.
-
-    Parameters
-    ----------
-    shape : tuple
-        (height, width) of well_crop
-    radius : int
-        Well radius in pixels (approximately width // 2)
-    wall_width : int
-        Thickness of wall region in pixels
-
-    Returns
-    -------
-    region_mask : np.ndarray (uint8)
-        0 = outside well
-        1 = core
-        2 = wall
-    """
-    h, w = shape
-    cx, cy = w // 2, h // 2
-
-    region_mask = np.zeros((h, w), dtype=np.uint8)
-
-    # Core region
-    cv2.circle(
-        region_mask,
-        (cx, cy),
-        radius - wall_width,
-        1,
-        -1,
-    )
-
-    # Wall region
-    cv2.circle(
-        region_mask,
-        (cx, cy),
-        radius,
-        2,
-        -1,
-    )
-    cv2.circle(
-        region_mask,
-        (cx, cy),
-        radius - wall_width,
-        0,
-        -1,
-    )
-
-    return region_mask
-
-
-def pad_to_size(img, target_h, target_w):
-    h, w = img.shape[:2]
-
-    pad_h = target_h - h
-    pad_w = target_w - w
-
-    if pad_h < 0 or pad_w < 0:
-        raise ValueError("Target size is smaller than image")
-
-    top = pad_h // 2
-    bottom = pad_h - top
-    left = pad_w // 2
-    right = pad_w - left
-
-    return cv2.copyMakeBorder(
-        img, top, bottom, left, right, borderType=cv2.BORDER_CONSTANT, value=0
-    )
-
-
-def crop_well(frame, well):
-    if frame.ndim == 3:
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-    well = list(map(int, well))
-    H, W = frame.shape[:2]
-
-    if len(well) == 3:
-        cx, cy, r = well
-        x1, x2 = cx - r, cx + r
-        y1, y2 = cy - r, cy + r
-
-        x1c, x2c = max(0, x1), min(W, x2)
-        y1c, y2c = max(0, y1), min(H, y2)
-
-        crop = frame[y1c:y2c, x1c:x2c].copy()
-
-        h, w = crop.shape[:2]
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cx_crop = cx - x1c
-        cy_crop = cy - y1c
-        cv2.circle(mask, (cx_crop, cy_crop), r, 255, -1)
-
-        crop[mask == 0] = 0
-        return crop
-
-    elif len(well) == 4:
-        x, y, w, h = well
-        x1, y1 = max(0, x), max(0, y)
-        x2, y2 = min(W, x + w), min(H, y + h)
-        return frame[y1:y2, x1:x2].copy()
-
-    raise ValueError("ROI format not recognized. Expected (cx, cy, r) or (x, y, w, h).")
-
-
-def find_endpoints(skel):
-    kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], np.uint8)
-
-    neighbors = cv2.filter2D(skel, -1, kernel)
-    ys, xs = np.where((skel > 0) & (neighbors == 255))
-    return list(zip(xs, ys))
-
-
-def trace_path(skel, start):
-    h, w = skel.shape
-    path = [start]
-    visited = set([start])
-    cur = start
-
-    while True:
-        x, y = cur
-        next_pixel = None
-
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                if dx == 0 and dy == 0:
-                    continue
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < w and 0 <= ny < h:
-                    if skel[ny, nx] and (nx, ny) not in visited:
-                        next_pixel = (nx, ny)
-                        break
-            if next_pixel is not None:
-                break
-
-        if next_pixel is None:
-            break
-
-        visited.add(next_pixel)
-        path.append(next_pixel)
-        cur = next_pixel
-
-    return path
-
-
-def create_writer(
-    file: str, width: int, height: int, frame_rate: float = 10.0, is_color: bool = True
-) -> cv2.VideoWriter:
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-    writer = cv2.VideoWriter(
-        file, fourcc, frame_rate, (width, height), isColor=is_color
-    )
-
-    if not writer.isOpened():
-        raise RuntimeError(f"Could not open VideoWriter for {file}")
-
-    return writer
+    rows = [np.hstack(filled[i : i + 2]) for i in range(0, len(filled), 2)]
+    return np.vstack(rows)

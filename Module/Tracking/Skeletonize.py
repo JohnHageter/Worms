@@ -4,9 +4,7 @@ import numpy as np
 from collections import deque
 from skimage.morphology import skeletonize
 
-# 8-connected neighborhood
 _NEI = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
-
 
 def _build_graph(skel: np.ndarray):
     """
@@ -81,15 +79,12 @@ def skeleton_longest_path(
     if coords.shape[0] < 2:
         return None, None, 0.0
 
-    # Two-pass BFS gives a good approximation of graph diameter
     a, _, _ = _bfs_farthest(0, adj)
     b, prev, _ = _bfs_farthest(a, adj)
 
     path_idx = _recover_path(b, prev)
     path_yx = coords[path_idx]  # (y,x)
 
-    # Compute Euclidean length along the ordered path
-    # Convert to (x,y) for downstream use
     path_xy = np.column_stack([path_yx[:, 1], path_yx[:, 0]]).astype(np.float32)
     if path_xy.shape[0] < 2:
         return None, None, 0.0

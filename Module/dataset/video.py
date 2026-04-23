@@ -73,30 +73,7 @@ def generate_dataset_from_timelapse(
     finally:
         writer.release()
 
-def crop_well_from_image(image, well) -> np.ndarray:
-    H, W = image.shape[:2]
-    x,y,r = well
 
-    r = int(round(r))
-    x = int(round(x))
-    y = int(round(y))
-    size = 2 * r
-
-    cropped = np.zeros((size, size), dtype=image.dtype)
-
-    x1_src = max(x - r, 0)
-    x2_src = min(x + r, W)
-    y1_src = max(y - r, 0)
-    y2_src = min(y + r, H)
-
-    x1_dst = max(0, r - x)
-    y1_dst = max(0, r - y)
-    x2_dst = x1_dst + (x2_src - x1_src)
-    y2_dst = y1_dst + (y2_src - y1_src)
-
-    cropped[y1_dst:y2_dst, x1_dst:x2_dst] = image[y1_src:y2_src, x1_src:x2_src]
-
-    return cropped
 
 def expand_well_radius(wells, scale=1.2):
     expanded = []
@@ -104,26 +81,3 @@ def expand_well_radius(wells, scale=1.2):
         r_new = r * scale
         expanded.append((x, y, r_new))
     return expanded
-
-
-def get_image_paths(folder):
-    type = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
-
-    files = [
-        os.path.join(folder, f)
-        for f in os.listdir(folder)
-        if Path(f).suffix.lower() in type
-    ]
-
-    return sorted(files)
-
-
-# Unsure of final frame rate. Barring num of frames can range from 5000 to 1000000
-# only work with individual frames at a time instead of loading all frames at once.
-def load_frame(image_path, scale=1.0):
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-    if img is None:
-        raise ValueError(f"Could not load image from {image_path}")
-    if scale != 1.0:
-        img = cv2.resize(img, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    return img

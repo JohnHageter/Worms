@@ -1,3 +1,11 @@
+"""
+
+OBSOLETE
+
+"""
+
+
+
 from pathlib import Path
 import sys
 
@@ -23,9 +31,6 @@ from Module.utils import (
     stitch_wells,
 )
 
-# ============================================================
-# CONFIG
-# ============================================================
 VIDEO_DIR = Path("D:/Tracking_Data/Sachi/T3/week_1/")
 OUT_DIR = Path("D:/Tracking_Data/Sachi/T3/debug_out")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -47,10 +52,6 @@ tracker_params = dict(
     min_area=10,
 )
 
-# ============================================================
-# HELPERS
-# ============================================================
-
 
 def to_bgr(img):
     if img.ndim == 2:
@@ -71,9 +72,6 @@ def pad_to_size(img, H, W):
     )
 
 
-# ============================================================
-# INIT TRACKERS & BACKGROUNDS
-# ============================================================
 
 TRACKERS = [WormTracker(i, **tracker_params) for i in range(len(WELLS))]
 
@@ -81,9 +79,6 @@ cap_bg = open_dataset(sorted(VIDEO_DIR.glob("*.mp4"))[0])
 WELL_BACKGROUNDS = sample_per_well_backgrounds(cap_bg, WELLS, n_frames=500)
 cap_bg.release()
 
-# ============================================================
-# VIDEO WRITERS (created lazily)
-# ============================================================
 
 writers = {}
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -104,10 +99,6 @@ def write_stages(stage_frames):
     for k, img in stage_frames.items():
         writers[k].write(img)
 
-
-# ============================================================
-# PER-WELL PROCESSING
-# ============================================================
 
 
 def process_well(frame, well_id, well):
@@ -136,10 +127,6 @@ def process_well(frame, well_id, well):
     )
 
 
-# ============================================================
-# MAIN LOOP
-# ============================================================
-
 video_paths = sorted(VIDEO_DIR.glob("*.mp4"))
 
 with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
@@ -167,7 +154,6 @@ with ThreadPoolExecutor(max_workers=N_WORKERS) as executor:
                 )
             )
 
-            # stitch each stage
             stage_names = per_well[0].keys()
             stitched = {}
 

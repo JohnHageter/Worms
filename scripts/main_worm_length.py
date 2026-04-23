@@ -4,40 +4,43 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from collections import Counter
-import re
+from matplotlib.lines import Line2D
 
-# -----------------------------
-# Inputs
-# -----------------------------
-DATA_DIR = Path("D:/Tracking_Data/Sachi/T3/week_1_out_v3")
+
+DATA_DIR = Path("D:/Tracking_Data/Sachi/T3/week_1_out")
 WELL_FILES = sorted(DATA_DIR.glob("well_*.h5"))
 
-# If available, this makes pixel->mm calibration much more accurate:
-WELLS_NPY = Path("wells.npy")  # contains circle ROIs like [cx, cy, r] or rect [x,y,w,h]
-
-# -----------------------------
-# Constants / settings
-# -----------------------------
 WELL_DIAMETER_MM = 35.0
-FPS = 2.0
-BIN_FRAMES = 1000
-SMOOTH_SIGMA = 3
-
-# If your videos all have the same frame count, use this for continuous time across videos:
-FRAMES_PER_VIDEO = int(FPS * 3530)  # adjust if needed
+FPS = 2.0  
+BIN_FRAMES = 1000  
+SMOOTH_SIGMA = 3  
+FRAMES_PER_VIDEO = int(FPS * 3530)
 
 REGION_CORE = 1
 REGION_WALL = 2
-REGION_COLORS = {REGION_CORE: "green", REGION_WALL: "orange", 0: "gray"}
-VIDEO_IDX = 1
 
-OUT_DIR = DATA_DIR / "length_plots"
-OUT_DIR.mkdir(parents=True, exist_ok=True)
+REGION_COLORS = {
+    REGION_CORE: "green",
+    REGION_WALL: "orange",
+}
 
 
-# -----------------------------
-# Utilities
-# -----------------------------
+events = {
+    5: {
+        "green": [(7, 5000), (24, 2500), (125, 1700)],
+        "red": [(82, 1000), (113, 5200), (120, 400)],
+    },
+    4: {
+        "red": [(25, 1300), (28, 0)],
+        "green": [(36, 6100), (22, 4200), (65, 1300), (103, 1500)],
+    },
+    3: {"red": [(69, 4200)]},
+    2: {"red": [(43, 3500)], "green": [(66, 600), (102, 4400)]},
+    1: {"green": [(80, 200)]},
+    0: {"green": [(80, 800), (109, 4400)]},
+}
+
+
 def print_h5_info(h5, label=""):
     print(f"\n=== HDF5 INFO {label} ===")
     for name, obj in h5.items():
@@ -45,83 +48,59 @@ def print_h5_info(h5, label=""):
     print("========================")
 
 
-def parse_well_id(path: Path) -> int:
-    m = re.search(r"well_(\d+)\.h5$", path.name)
-    if not m:
-        raise ValueError(f"Could not parse well id from: {path.name}")
-    return int(m.group(1))
-
-
-def well_diameter_px_from_wells_npy(wells: np.ndarray, well_id: int) -> float:
+def compute_length_px(main):
     """
-    wells[well_id] is either [cx, cy, r] or [x, y, w, h]
-    Your crop_well uses a 2r x 2r crop for circle ROIs => diameter_px = 2r
+    Compute head-centroid-tail length in pixels for the PRIMARY worm only.
+
+    main columns:
+    4  cx
+    5  cy
+    6  hx
+    7  hy
+    8  tx
+    9  ty
+    10 region
+    12 is_primary
     """
-    roi = wells[well_id].astype(int).tolist()
-    if len(roi) == 3:
-        _, _, r = roi
-        return float(2 * r)
-    if len(roi) == 4:
-        _, _, w, h = roi
-        return float(max(w, h))
-    raise ValueError(f"Unsupported ROI format for well {well_id}: {roi}")
 
+    cx, cy = main[:, 4], main[:, 5]
+    hx, hy = main[:, 6], main[:, 7]
+    tx, ty = main[:, 8], main[:, 9]
+    region = main[:, 10]
+    is_primary = main[:, 12]
 
-def robust_well_diameter_px(cx: np.ndarray, cy: np.ndarray) -> float:
-    """
-    Fallback estimator if you don't have wells.npy.
-    Uses robust range (95th - 5th percentile) so a worm that doesn't explore the whole well
-    won't explode the estimate too badly.
-    """
-    cx = cx[np.isfinite(cx)]
-    cy = cy[np.isfinite(cy)]
-    if cx.size < 10 or cy.size < 10:
-        return np.nan
-    dx = np.percentile(cx, 95) - np.percentile(cx, 5)
-    dy = np.percentile(cy, 95) - np.percentile(cy, 5)
-    return float(max(dx, dy))
+    confident = (is_primary == 1) & (hx >= 0) & (tx >= 0)
 
+    length_px = np.full(len(main), np.nan)
 
-def compute_length_px(tr: np.ndarray):
-    """
-    tr is structured array with fields cx,cy,hx,hy,tx,ty,region.
-    Length computed only when head and tail exist (>=0).
-    """
-    cx = tr["cx"].astype(float)
-    cy = tr["cy"].astype(float)
-    hx = tr["hx"].astype(float)
-    hy = tr["hy"].astype(float)
-    tx = tr["tx"].astype(float)
-    ty = tr["ty"].astype(float)
-    region = tr["region"].astype(int)
-
-    valid = (hx >= 0) & (hy >= 0) & (tx >= 0) & (ty >= 0)
-
-    length_px = np.full(cx.shape, np.nan, dtype=float)
     d_hc = np.sqrt((hx - cx) ** 2 + (hy - cy) ** 2)
     d_ct = np.sqrt((cx - tx) ** 2 + (cy - ty) ** 2)
-    length_px[valid] = d_hc[valid] + d_ct[valid]
 
-    return length_px, valid, region
+    length_px[confident] = d_hc[confident] + d_ct[confident]
+    return length_px, confident, region
 
 
-def time_hours(video_idx: np.ndarray, frame_idx: np.ndarray) -> np.ndarray:
+def robust_well_diameter_px(cx, cy):
     """
-    Continuous time across videos.
+    For circular ROIs, estimate diameter from centroid span.
     """
-    global_frame = video_idx.astype(int) * FRAMES_PER_VIDEO + frame_idx.astype(int)
-    return global_frame / FPS / 3600.0
+    return max(
+        np.nanmax(cx) - np.nanmin(cx),
+        np.nanmax(cy) - np.nanmin(cy),
+    )
 
 
 def bin_trace_by_time(time_h, length_mm, region, bin_hours):
     """
-    Time-based binning with region voting restricted to valid length frames.
+    Time-based binning with region voting restricted to valid frames.
     """
     xb, yb, rb = [], [], []
+
     edges = np.arange(time_h.min(), time_h.max() + bin_hours, bin_hours)
 
     for t0, t1 in zip(edges[:-1], edges[1:]):
-        mask = (time_h >= t0) & (time_h < t1) & np.isfinite(length_mm)
+        mask = (time_h >= t0) & (time_h < t1)
+
         if mask.sum() < 10:
             continue
 
@@ -134,103 +113,108 @@ def bin_trace_by_time(time_h, length_mm, region, bin_hours):
     return np.asarray(xb), np.asarray(yb), np.asarray(rb)
 
 
-def smooth_nan_safe(y: np.ndarray, sigma: float) -> np.ndarray:
-    """
-    Smooth y while respecting NaNs by smoothing data and weights separately.
-    """
-    y = y.astype(float)
-    mask = np.isfinite(y).astype(float)
-    y0 = np.nan_to_num(y, nan=0.0)
-
-    ys = gaussian_filter1d(y0, sigma=sigma, mode="nearest")
-    ms = gaussian_filter1d(mask, sigma=sigma, mode="nearest")
-
-    with np.errstate(invalid="ignore", divide="ignore"):
-        out = ys / ms
-    out[ms < 1e-6] = np.nan
-    return out
-
-
-# -----------------------------
-# Load wells.npy if available
-# -----------------------------
-WELLS = None
-if WELLS_NPY.exists():
-    WELLS = np.load(WELLS_NPY)
-    print(f"Loaded wells from {WELLS_NPY} (shape={WELLS.shape})")
-else:
-    print(
-        "wells.npy not found; will estimate well diameter from centroid span (less accurate)."
-    )
-
-# -----------------------------
-# Main plotting loop
-# -----------------------------
-BIN_HOURS = BIN_FRAMES / FPS / 3600.0
-
 for path in WELL_FILES:
-    well_id = parse_well_id(path)
-
     with h5py.File(path, "r") as h5:
         print_h5_info(h5, label=path.name)
-        tr = h5["tracking"][()]  # structured rows
+        main = h5["main"][:]  # type: ignore
+        fission = h5["fission"][:] if "fission" in h5 else None  # type: ignore
 
-    if tr.shape[0] == 0:
-        print(f"Well {well_id}: no tracking data, skipping.")
-        continue
+    length_px, confident, region = compute_length_px(main)
+    well = int(path.stem.split("_")[1])
+    length_px = length_px[confident]
+    region = region[confident] #type: ignore
+    frame_idx = main[:, 1][confident]  # type: ignore
+    video_idx = main[:, 0][confident]  # type: ignore
 
-    # Extract time
-    t_h = time_hours(tr["video_idx"], tr["frame_idx"])
+    global_frame_idx = video_idx * FRAMES_PER_VIDEO + frame_idx  # type: ignore
+    time_hours = global_frame_idx / FPS / 3600.0
 
-    # Compute length in pixels
-    length_px, valid, region = compute_length_px(tr)
+    cx = main[:, 4][confident]  # type: ignore
+    cy = main[:, 5][confident]  # type: ignore
 
-    # Determine well diameter in pixels for px->mm conversion
-    if WELLS is not None and well_id < len(WELLS):
-        diam_px = well_diameter_px_from_wells_npy(WELLS, well_id)
-    else:
-        diam_px = robust_well_diameter_px(
-            tr["cx"].astype(float), tr["cy"].astype(float)
-        )
-
-    if not np.isfinite(diam_px) or diam_px <= 0:
-        print(f"Well {well_id}: could not determine well diameter in px, skipping.")
-        continue
-
-    px_to_mm = WELL_DIAMETER_MM / diam_px
+    well_diam_px = robust_well_diameter_px(cx, cy)
+    px_to_mm = WELL_DIAMETER_MM / well_diam_px
     length_mm = length_px * px_to_mm
 
-    # Bin and smooth
-    xb, yb, rb = bin_trace_by_time(t_h, length_mm, region, BIN_HOURS)
-    ys = smooth_nan_safe(yb, sigma=SMOOTH_SIGMA) if len(yb) > 3 else yb
+    BIN_HOURS = (BIN_FRAMES / FPS) / 3600.0
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.set_title(f"Well {well_id} — Worm length (mm) vs time")
-    ax.set_xlabel("Time (hours)")
-    ax.set_ylabel("Length (mm)")
+    bx, by, br = bin_trace_by_time(
+        time_hours,
+        length_mm,
+        region,
+        BIN_HOURS,
+    )
 
-    # scatter binned points colored by region mode
-    for reg_code in np.unique(rb) if rb.size else []:
-        m = rb == reg_code
-        ax.scatter(
-            xb[m],
-            yb[m],
-            s=20,
-            alpha=0.8,
-            color=REGION_COLORS.get(int(reg_code), "gray"),
-            label=f"Region {int(reg_code)}",
+    by_smooth = gaussian_filter1d(by, sigma=SMOOTH_SIGMA)
+
+    plt.figure(figsize=(12, 4))
+
+    for i in range(len(bx) - 1):
+        color = REGION_COLORS.get(br[i], "gray")
+        plt.plot(bx[i : i + 2], by_smooth[i : i + 2], lw=2, color=color)
+
+    if fission is not None and len(fission) > 0:  # type: ignore
+        print("Number of fission events:", len(fission))  # type: ignore
+
+        fission_hours = fission[:, 1] / FPS / 3600.0  # type: ignore
+        y_marker = np.nanmax(by_smooth) * 1.05
+
+        plt.scatter(
+            fission_hours,
+            np.full_like(fission_hours, y_marker),
+            color="red",
+            s=30,
+            zorder=5,
         )
+    else:
+        print("Number of fission events: 0")
 
-    # smoothed line
-    ax.plot(xb, ys, color="black", linewidth=2, label="Smoothed")
+    if well in events:
 
-    ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
+        y_event = np.nanmax(by_smooth) * 1.02
 
-    out_png = OUT_DIR / f"well_{well_id:02d}_length_video{VIDEO_IDX:04d}.png"
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=200)
-    plt.close(fig)
+        for color, pts in events[well].items():
+            for v, f in pts:
 
-    print(f"Saved: {out_png}")
+                global_frame = v * FRAMES_PER_VIDEO + f
+                t = global_frame / FPS / 3600.0
+
+                if t < bx.min() or t > bx.max():
+                    continue
+
+                idx = np.argmin(np.abs(bx - t))
+                y = by_smooth[idx]
+
+                plt.scatter(
+                    t,
+                    y + 0.2,
+                    c=color,
+                    s=30,
+                    zorder=6,
+                )
+
+    max_hours = time_hours.max()
+    day_ticks = np.arange(0, max_hours + 24, 24)
+
+    plt.xticks(day_ticks)
+    plt.xlabel("Time (hours)")
+    plt.ylabel("Head–Centroid–Tail length (mm)")
+    plt.title(f"{path.stem} — Main worm length")
+
+    legend_elements = [
+        Line2D([0], [0], color="green", lw=2, label="Core"),
+        Line2D([0], [0], color="orange", lw=2, label="Wall"),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="red",
+            linestyle="None",
+            markersize=6,
+            label="Fission event",
+        ),
+    ]
+
+    plt.legend(handles=legend_elements, frameon=False)
+    plt.tight_layout()
+    plt.show()

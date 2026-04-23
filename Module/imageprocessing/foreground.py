@@ -1,9 +1,7 @@
 import cv2
 import numpy as np
 
-from Module.Tracking.Detection import BlobDetection
-from Module.imageprocessing.ImageProcessor import find_components
-
+from Module.Tracking.Detection import find_components
 
 def get_wall_foreground(frame_gray, wall_mask, canny_low=100, canny_high=200):
     """
@@ -70,50 +68,3 @@ def extract_foreground_advanced(
         pass
 
     return fg_diff, clean
-
-
-def detect_blobs(
-    thresh,
-    region_mask=None,
-    min_area=10,
-    max_area=5000,
-    min_aspect_ratio=1.5,  # worms are elongated
-):
-    """
-    Detect connected blobs with additional filtering for worm shape.
-    Returns list[BlobDetection].
-    """
-    fg = thresh.astype(np.uint8)
-    _, labels, stats, _ = find_components(fg)
-
-    detections = []
-    for i in range(1, stats.shape[0]):
-        x, y, w, h, area = stats[i]
-
-        # Area filtering
-        if area < min_area or area > max_area:
-            continue
-
-        # Aspect ratio filtering (width/height or height/width)
-        aspect = max(w, h) / (min(w, h) + 1e-6)
-        if aspect < min_aspect_ratio:
-            continue
-
-        mask = (labels[y : y + h, x : x + w] == i).astype(np.uint8)
-
-        region = 0
-        if region_mask is not None:
-            region_slice = region_mask[y : y + h, x : x + w]
-            core = np.sum((mask > 0) & (region_slice == 1))
-            wall = np.sum((mask > 0) & (region_slice == 2))
-            if core > 0 or wall > 0:
-                region = 2 if wall > core else 1
-
-        detections.append(
-            BlobDetection(
-                bbox=(int(x), int(y), int(w), int(h)),
-                mask=mask,
-                region=region,
-            )
-        )
-    return detections

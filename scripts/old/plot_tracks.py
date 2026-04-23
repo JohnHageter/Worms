@@ -1,37 +1,30 @@
+"""
+OBSOLETE
+"""
+
+
+
 from pathlib import Path
 from pprint import pprint
 import numpy as np
 import h5py
 import cv2
 
-# ----------------------------
-# User settings
-# ----------------------------
+
 H5_DIR = Path(
     r"D:/Tracking_Data/Sachi/T3/week_1_out_v3"
-)  # folder containing well_0.h5, well_1.h5, ...
-WELLS_NPY = Path("wells.npy")  # your ROI definitions (cx,cy,r) or (x,y,w,h)
+)  
+WELLS_NPY = Path("wells.npy")  
 OUT_DIR = H5_DIR / "track_plots"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-VIDEO_IDX = 0  # which video_idx to plot (change as needed)
-DRAW_POINTS = False  # True: draw dots on trajectory points
+VIDEO_IDX = 0  
+DRAW_POINTS = False  
 LINE_THICKNESS = 2
 POINT_RADIUS = 2
 
-# If your H5 "tracking" is numeric NxM instead of compound dtype, set this mapping:
 NUMERIC_COLUMNS = None
-# Example:
-# NUMERIC_COLUMNS = {
-#     "video_idx": 0, "frame_idx": 1, "track_id": 2,
-#     "cx": 3, "cy": 4, "hx": 5, "hy": 6, "tx": 7, "ty": 8,
-#     "region": 9, "ht_conf": 10
-# }
 
-
-# ----------------------------
-# Helpers
-# ----------------------------
 def roi_size_and_origin(roi):
     """
     Matches your crop_well():
@@ -75,7 +68,6 @@ def load_tracking_rows(h5_path: Path, video_idx: int):
     if arr.shape[0] == 0:
         return None
 
-    # Compound dtype
     if arr.dtype.names is not None:
         required = {"video_idx", "frame_idx", "track_id", "cx", "cy"}
         missing = required.difference(arr.dtype.names)
@@ -95,7 +87,6 @@ def load_tracking_rows(h5_path: Path, video_idx: int):
             "cy": arr["cy"].astype(float),
         }
 
-    # Numeric NxM
     if NUMERIC_COLUMNS is None:
         raise ValueError(
             f"{h5_path} tracking dataset is numeric; set NUMERIC_COLUMNS mapping at top of script."
@@ -124,7 +115,6 @@ def draw_tracks_on_well_canvas(well_roi, rows_dict):
     """
     (w, h), (ox, oy) = roi_size_and_origin(well_roi)
 
-    # Canvas is just black; if you want, you can draw circle boundary later
     canvas = np.zeros((h, w, 3), dtype=np.uint8)
 
     if rows_dict is None:
@@ -135,7 +125,6 @@ def draw_tracks_on_well_canvas(well_roi, rows_dict):
     cx = rows_dict["cx"]
     cy = rows_dict["cy"]
 
-    # Group by track_id
     unique_ids = np.unique(track_id)
 
     for tid in unique_ids:
@@ -143,13 +132,11 @@ def draw_tracks_on_well_canvas(well_roi, rows_dict):
         xs = cx[mask] - ox
         ys = cy[mask] - oy
 
-        # Keep points inside canvas
         pts = np.column_stack([xs, ys]).astype(np.float32)
         pts = pts[np.isfinite(pts).all(axis=1)]
         if pts.shape[0] < 2:
             continue
 
-        # Convert to int pixel coords
         pts_i = np.round(pts).astype(np.int32)
 
         # Clip
@@ -158,7 +145,6 @@ def draw_tracks_on_well_canvas(well_roi, rows_dict):
 
         color = id_to_bgr(int(tid))
 
-        # Draw polyline
         cv2.polylines(
             canvas,
             [pts_i.reshape(-1, 1, 2)],
@@ -167,12 +153,10 @@ def draw_tracks_on_well_canvas(well_roi, rows_dict):
             thickness=LINE_THICKNESS,
         )
 
-        # Optional: draw points
         if DRAW_POINTS:
             for px, py in pts_i:
                 cv2.circle(canvas, (int(px), int(py)), POINT_RADIUS, color, -1)
 
-        # Label at last point
         lx, ly = int(pts_i[-1, 0]), int(pts_i[-1, 1])
         cv2.putText(
             canvas,
@@ -185,7 +169,6 @@ def draw_tracks_on_well_canvas(well_roi, rows_dict):
             cv2.LINE_AA,
         )
 
-    # If circular ROI, draw boundary for context
     roi = np.asarray(well_roi).astype(int).tolist()
     if len(roi) == 3:
         _, _, r = roi
